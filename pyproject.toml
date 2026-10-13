@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zerostore"
+version = "0.1.0.dev0"
+description = "Tell your sources once. Every agent knows. A self-hosted knowledge layer that serves your company's current truth to AI agents over MCP."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Khoi Tran" }]
+keywords = ["mcp", "agents", "knowledge base", "rag", "lancedb"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "lancedb>=0.40,<1",
+    "pyarrow>=16",
+    "mcp>=2.3,<3",
+    "pydantic>=2.12,<3",
+    "pyyaml>=6",
+    "typer>=0.16",
+    "starlette>=0.48",
+    "uvicorn>=0.31",
+]
+
+[project.optional-dependencies]
+local = ["fastembed>=0.5"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+zerostore = "zerostore.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/KhoiTran2023/ZeroStore"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zerostore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:lancedb.*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]  # typer declares options as argument defaults
