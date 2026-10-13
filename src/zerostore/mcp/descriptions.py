@@ -59,3 +59,7 @@ REVIEW_LIST = (
     "low-confidence changes and facts agents proposed."
 )
 REVIEW_DECIDE = "Owner only. Approve or reject a review item by its id."
+SYNC_NOW = (
+    "Owner only. Check every connected source for changes now instead of waiting for the schedule, "
+    "and report what changed."
+)

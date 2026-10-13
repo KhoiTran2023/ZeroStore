@@ -26,6 +26,8 @@ def test_empty_sources_key_is_allowed():
 
 def test_full_example_parses(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     cfg = load_config(Path(__file__).parent.parent / "zerostore.example.yaml")
     assert cfg.sources.enabled() == ["google_drive", "github", "linear"]
@@ -33,6 +35,13 @@ def test_full_example_parses(monkeypatch):
     assert cfg.ai.llm_api_key == "sk-test"
     assert cfg.ai.jev_api_key is None  # unset optional key counts as missing
     assert cfg.confidential[1].linear_label == "hr"
+    assert cfg.sources.github.token == "ghp_test"
+    assert cfg.sources.linear.api_key is None
+
+
+def test_bad_cron_is_rejected():
+    with pytest.raises(ConfigError, match="sync.schedule"):
+        parse_config({"sources": {}, "sync": {"schedule": "0 25 * * *"}})
 
 
 def test_env_inside_longer_string_must_exist(monkeypatch):

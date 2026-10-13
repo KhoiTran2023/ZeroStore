@@ -31,10 +31,14 @@ class _Section(BaseModel):
 
 class GoogleDriveSource(_Section):
     folders: list[str] = Field(default_factory=list)
+    # Path to a Google credentials file: what "Sign in with Google" saves, or a service-account key.
+    credentials: str | None = "~/.zerostore/google-credentials.json"
 
 
 class GitHubSource(_Section):
     repos: list[str] = Field(default_factory=list)
+    token: str | None = None  # needed for private repos, e.g. ${GITHUB_TOKEN}
+    include: list[str] = Field(default_factory=lambda: ["*.md", "*.mdx", "*.markdown", "*.txt", "*.rst"])
 
     @field_validator("repos")
     @classmethod
@@ -47,6 +51,7 @@ class GitHubSource(_Section):
 
 class LinearSource(_Section):
     teams: list[str] = Field(default_factory=list)
+    api_key: str | None = None  # e.g. ${LINEAR_API_KEY}
 
 
 class Sources(_Section):
@@ -63,11 +68,17 @@ class SyncSettings(_Section):
 
     @field_validator("schedule")
     @classmethod
-    def _five_field_cron(cls, schedule: str) -> str:
+    def _valid_cron(cls, schedule: str) -> str:
+        from apscheduler.triggers.cron import CronTrigger
+
         if len(schedule.split()) != 5:
             raise ValueError(
                 f"sync.schedule must be a cron line with 5 fields like '0 6 * * *', got {schedule!r}"
             )
+        try:
+            CronTrigger.from_crontab(schedule)
+        except ValueError as exc:
+            raise ValueError(f"sync.schedule {schedule!r} isn't a valid cron line: {exc}") from None
         return schedule
 
 
