@@ -1,0 +1,53 @@
+# ZeroStore settings, with every option shown.
+# Only `sources` is required. The setup page writes this file for most people.
+# Values like ${LLM_API_KEY} are read from environment variables, so keys never
+# need to be written here. Tokens and access levels are managed with
+# `zerostore token`, never in this file.
+
+# Where company truth lives. ZeroStore only reads these; it never edits them.
+sources:
+  google_drive: { folders: ["Company/Decisions", "Company/Pricing"] }
+  github:       { repos: ["acme/app"] }
+  linear:       { teams: ["Product"] }
+
+# When to check sources for changes (cron format). Default: daily at 06:00.
+# `zerostore sync` runs a sync right away.
+sync:
+  schedule: "0 6 * * *"
+
+# Your own AI account. Bring your own key; any provider works.
+ai:
+  decision_engine: jev          # jev, or llm (clef later)
+  jev_api_key: ${JEV_API_KEY}   # optional; without it, your LLM is used
+  llm_provider: anthropic       # any provider, including local ollama
+  llm_model: mid-tier
+  llm_api_key: ${LLM_API_KEY}
+  embeddings: provider          # provider, or local (falls back to local if the provider has none)
+
+# Changes at or above this confidence go live; lower ones wait in the review queue.
+review:
+  auto_apply_at: 0.80
+
+# How agents' questions are answered.
+retrieval:
+  max_facts: 5                  # facts returned per question
+  answer_cutoff: 0.50           # below this, answer "not sure" instead of weak facts
+  rerank_rule: "Prefer the current decision over old discussion about it."
+  narrow_with: auto             # auto, jev, llm, or off
+  rerank_with: auto             # auto, jev, llm, local, or off
+
+# Optional: mark whole sources confidential. Only confidential and owner
+# tokens can see them. With no rules, everything is non-confidential.
+confidential:
+  - google_drive: "Company/Finance"
+  - linear_label: "hr"
+
+agent_proposals: true           # agents may propose facts for you to approve
+web_ui: true
+
+# Where each part runs and keeps its data.
+servers:
+  host: localhost               # serving beyond this machine requires HTTPS
+  port: 8765
+  vectordb: ~/.zerostore/facts.lance      # or s3://bucket/path
+  statedb:  ~/.zerostore/state.sqlite     # Postgres comes later
