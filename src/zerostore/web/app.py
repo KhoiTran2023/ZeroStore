@@ -10,12 +10,14 @@ import functools
 import json
 import logging
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import anyio
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -23,7 +25,8 @@ from fastapi.templating import Jinja2Templates
 
 from zerostore import __version__
 from zerostore.app import ZeroStore
-from zerostore.config import CONFIG_FILENAME, home_dir
+from zerostore.config import CONFIG_FILENAME, config_env, home_dir
+from zerostore.connectors import google_signin as google
 from zerostore.web import auth, charts
 from zerostore.web.owner import OwnerClient, OwnerError
 from zerostore.web.settings import (
@@ -31,7 +34,9 @@ from zerostore.web.settings import (
     apply_form,
     form_values,
     read_text,
+    save_secrets,
     save_text,
+    update_drive,
     version_of,
 )
 
@@ -39,6 +44,7 @@ log = logging.getLogger("zerostore.web")
 
 HERE = Path(__file__).parent
 COOKIE = "zerostore_session"
+DRIVE_NAMES_KEY = "gdrive_folder_names"  # names to show for folders saved as id:...
 AGENT_RULE_FILE = "CLAUDE.md"
 
 ACTION_LABELS = {
@@ -209,12 +215,14 @@ def create_web_app(
     mcp_url: str | None = None,
     behind_proxy: bool = False,
     scheduled: bool = True,
+    google_http: Callable[[], httpx.Client] | None = None,
 ) -> FastAPI:
     """The web UI for one ZeroStore.
 
     `behind_proxy`: a reverse proxy in front forwards requests, so the Host header
     may be the public name and the public origin comes from X-Forwarded-Host.
     `scheduled`: this process runs timed syncs (shown on the status page).
+    `google_http`: makes the HTTP client for talking to Google (tests pass a fake one).
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -231,6 +239,8 @@ def create_web_app(
     app.state.sessions = sessions
     app.state.owner = owner
     app.state.syncer = syncer
+    flows = google.Flows()
+    google_http = google_http or (lambda: httpx.Client(timeout=30))
 
     async def call(token: str, tool: str, **args: Any) -> dict[str, Any]:
         try:
@@ -559,7 +569,7 @@ def create_web_app(
         return RedirectResponse("/settings", status_code=303)
 
     @app.get("/setup", response_class=HTMLResponse)
-    async def setup_page(request: Request, step: int | None = None):
+    async def setup_page(request: Request, step: int | None = None, folder: str = "root", path: str = ""):
         session = session_of(request)
         status = await call(session.token, "status")
         try:
@@ -568,13 +578,15 @@ def create_web_app(
             say(session, "warn", f"{exc}. Fix it in the YAML view.")
             return RedirectResponse("/settings?view=yaml", status_code=303)
         cfg = values["config"]
+        s = cfg.sources
         done = {
-            1: bool(cfg.sources.enabled()),
+            1: bool((s.google_drive and s.google_drive.folders) or s.github or s.linear),
             2: cfg.ai.has_llm or cfg.ai.has_jev or cfg.ai.decision_engine == "demo",
             3: any(t["level"] != "owner" for t in status["tokens"]),
         }
         if step not in (1, 2, 3):
             step = next((k for k in (1, 2, 3) if not done[k]), 3)
+        drive = await anyio.to_thread.run_sync(drive_view, request, cfg, folder, path) if step == 1 else None
         return await render(
             request,
             "setup.html",
@@ -584,10 +596,193 @@ def create_web_app(
             v=values,
             step=step,
             done=done,
+            drive=drive,
             schedule=values["schedules"].get(cfg.sync.schedule, cfg.sync.schedule),
             rule_file=AGENT_RULE_FILE,
             scheduled=scheduled,
         )
+
+    # Sign in with Google ---------------------------------------------------------
+
+    def on_this_computer(request: Request) -> bool:
+        return not behind_proxy and auth.host_name(request.headers.get("host", "")) in auth.LOOPBACK_NAMES
+
+    def credentials_file() -> Path:
+        drive = zs.config.sources.google_drive
+        if drive and drive.credentials:
+            return Path(drive.credentials).expanduser()
+        return config_path.parent / google.CREDENTIALS_FILENAME
+
+    def folder_names() -> dict[str, str]:
+        try:
+            return json.loads(zs.state.get_meta(DRIVE_NAMES_KEY) or "{}")
+        except ValueError:
+            return {}
+
+    def drive_view(request: Request, cfg, folder: str, path: str) -> dict[str, Any]:
+        """What the setup page shows for Google Drive: sign-in state, chosen folders, a folder browser."""
+        drive = cfg.sources.google_drive
+        names = folder_names()
+        view: dict[str, Any] = {
+            "client": google.oauth_client(config_env(config_path)),
+            "local": on_this_computer(request),
+            "account": google.signed_in_as(credentials_file()),
+            "chosen": [{"value": f, "label": names.get(f, f)} for f in (drive.folders if drive else [])],
+            "folder": folder,
+            "path": path,
+            "redirect_uri": google.PASTE_REDIRECT,
+        }
+        if not view["account"]:
+            return view
+        from zerostore.connectors.base import ConnectorError
+        from zerostore.connectors.google_auth import GoogleAuth
+
+        top = folder in ("root", "shared", "drives")
+        view["crumbs"] = [
+            {"name": p, "path": "/".join(path.split("/")[: i + 1])}
+            for i, p in enumerate(path.split("/"))
+            if p
+        ]
+        with google_http() as http:
+            try:
+                rows = google.list_folders(GoogleAuth(credentials_file(), http).token(), folder, http)
+            except (google.SignInError, ConnectorError) as exc:
+                view["error"] = str(exc)
+                return view
+        in_my_drive = folder == "root" or (not top and bool(path))
+        taken = {r["name"] for r in rows if [x["name"] for x in rows].count(r["name"]) > 1}
+        for row in rows:
+            child_path = f"{path}/{row['name']}" if path else row["name"]
+            by_path = in_my_drive and row["name"] not in taken and "/" not in row["name"]
+            row["value"] = child_path if by_path else f"id:{row['id']}"
+            row["label"] = child_path if in_my_drive else row["name"]
+            row["open"] = f"/setup?step=1&folder={quote(row['id'])}" + (
+                f"&path={quote(child_path)}" if in_my_drive else ""
+            )
+        view["rows"] = rows
+        return view
+
+    def signed_in(session: auth.Session, flow: google.Flow, code: str | None) -> None:
+        if not code:
+            raise google.SignInError("Google didn't send a sign-in code back")
+        with google_http() as http:
+            credentials, email = google.finish(flow, code, http)
+        target = config_path.parent / google.CREDENTIALS_FILENAME
+        if target.exists() and not google.signed_in_as(target):
+            target = config_path.parent / "google-signin.json"  # never overwrite a service-account key
+        google.save_credentials(target, credentials, email)
+        zs.config = update_drive(config_path, credentials=str(target))
+        say(session, "ok", f"Signed in to Google as {email}. Now add the folders ZeroStore should read.")
+
+    @app.get("/setup/google/start")
+    async def google_start(request: Request):
+        session = session_of(request)
+        client = google.oauth_client(config_env(config_path))
+        if client is None:
+            say(session, "warn", "Add your Google sign-in app below first.")
+            return RedirectResponse("/setup?step=1", status_code=303)
+        local = on_this_computer(request)
+        redirect_uri = (
+            f"{request.url.scheme}://{request.headers['host']}/setup/google/callback"
+            if local
+            else google.PASTE_REDIRECT
+        )
+        flow = flows.start(client, redirect_uri, session)
+        return RedirectResponse(flow.url(), status_code=303)
+
+    @app.get("/setup/google/callback", response_class=HTMLResponse)
+    async def google_callback(
+        request: Request, state: str | None = None, code: str | None = None, error: str | None = None
+    ):
+        # Google's redirect is a cross-site navigation, so the SameSite=Strict session cookie
+        # doesn't come with it: the one-time `state` proves which signed-in session asked.
+        try:
+            flow = flows.take(state)
+            if error:
+                raise google.SignInError(
+                    "you didn't allow access on Google's page"
+                    if error == "access_denied"
+                    else f"Google said {error}"
+                )
+            await anyio.to_thread.run_sync(signed_in, flow.owner, flow, code)
+            message = None
+        except (google.SignInError, SettingsError) as exc:
+            message = f"Not signed in: {exc}."
+            if "flow" in locals():
+                say(flow.owner, "warn", message)
+        return templates.TemplateResponse(request, "google_done.html", {"message": message})
+
+    @app.post("/setup/google/paste")
+    async def google_paste(request: Request):
+        session, form = await posted(request)
+        code, state, error = google.read_pasted(form.get("address", ""))
+        try:
+            flow = flows.take(state)
+            if flow.owner is not session:
+                raise google.SignInError("that sign-in was started in another browser")
+            if error:
+                raise google.SignInError(f"Google said {error}")
+            await anyio.to_thread.run_sync(signed_in, session, flow, code)
+        except (google.SignInError, SettingsError) as exc:
+            say(session, "warn", f"Not signed in: {exc}.")
+        return RedirectResponse("/setup?step=1", status_code=303)
+
+    @app.post("/setup/google/client")
+    async def google_client(request: Request):
+        session, form = await posted(request)
+        try:
+            client_id = google.check_client_id(form.get("client_id", ""))
+            secret = (form.get("client_secret") or "").strip()
+            if not secret or any(c.isspace() for c in secret):
+                raise google.SignInError("paste the client secret too")
+            await anyio.to_thread.run_sync(
+                save_secrets,
+                config_path,
+                {google.CLIENT_ID_NAME: client_id, google.CLIENT_SECRET_NAME: secret},
+            )
+            say(session, "ok", "Saved your Google sign-in app. Now sign in with Google.")
+        except (google.SignInError, SettingsError) as exc:
+            say(session, "warn", f"Not saved: {exc}.")
+        return RedirectResponse("/setup?step=1", status_code=303)
+
+    @app.post("/setup/google/signout")
+    async def google_signout(request: Request):
+        session, _ = await posted(request)
+        target = credentials_file()
+        if google.signed_in_as(target):
+
+            def forget() -> None:
+                with google_http() as http:
+                    google.sign_out(target, http)
+
+            await anyio.to_thread.run_sync(forget)
+            say(session, "ok", "Signed out of Google. Syncs skip Google Drive until you sign in again.")
+        return RedirectResponse("/setup?step=1", status_code=303)
+
+    @app.post("/setup/google/folders")
+    async def google_folders(request: Request):
+        session, form = await posted(request)
+        value = (form.get("value") or "").strip()
+        back = form.get("back") or "/setup?step=1"
+        if not back.startswith("/setup?step=1"):
+            back = "/setup?step=1"  # only this page, never a redirect elsewhere
+        if value:
+            try:
+                if form.get("action") == "remove":
+                    zs.config = await anyio.to_thread.run_sync(
+                        functools.partial(update_drive, config_path, remove=value)
+                    )
+                else:
+                    zs.config = await anyio.to_thread.run_sync(
+                        functools.partial(update_drive, config_path, add=value)
+                    )
+                    if value.startswith("id:") and form.get("label"):
+                        names = folder_names()
+                        names[value] = form["label"][:200]
+                        zs.state.set_meta(DRIVE_NAMES_KEY, json.dumps(names))
+            except SettingsError as exc:
+                say(session, "warn", f"Not saved: {exc}")
+        return RedirectResponse(back, status_code=303)
 
     @app.post("/setup/sync")
     async def first_sync(request: Request):

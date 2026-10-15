@@ -124,3 +124,8 @@ details.twin table { margin-top: 6px; max-width: 360px; }
   .right { margin-left: 0; }
 }
 @media (forced-colors: active) { svg.viz path, svg.viz rect:not(.hit) { forced-color-adjust: none; } }
+details.more { border-top: 1px solid var(--rule); padding-top: 4px; }
+details.more summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--soft); }
+details.more summary:hover { color: var(--text); }
+details.more summary::before { content: "▸"; width: 1.2em; color: var(--muted); }
+details.more[open] summary::before { content: "▾"; }

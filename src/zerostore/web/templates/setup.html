@@ -31,13 +31,97 @@
 
 <section class="box stack" style="padding:20px">
   {% if step == 1 %}
+  {% set d = drive %}
+  {% set csrf_field %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endset %}
   <h2 style="margin:0;font-size:16px">your docs</h2>
-  <p style="margin:0" class="muted">ZeroStore reads these on every sync. It never edits them. Sign in with Google comes in a later version; for now point it at a Google credentials file (a service-account key shared on your folders).</p>
-  <form method="post" action="/settings" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><input type="hidden" name="sections" value="sources"><input type="hidden" name="back" value="/setup?step=2">
-    {% include "_sources.html" %}
-    <div><button class="btn go" type="submit">Save</button></div>
-  </form>
+  <p style="margin:0" class="muted">ZeroStore reads these on every sync. It never edits them.</p>
+  {% if d.account %}
+  <div class="split">
+    <span>Google Drive · signed in as <b>{{ d.account }}</b></span>
+    <form method="post" action="/setup/google/signout">{{ csrf_field }}<button class="linkish" type="submit">sign out of Google</button></form>
+  </div>
+  {% set chosen = d.chosen|map(attribute="value")|list %}
+  {% set here = "/setup?step=1&folder=" ~ (d.folder|urlencode) ~ ("&path=" ~ (d.path|urlencode) if d.path else "") %}
+  <div class="stack" style="gap:6px">
+    <h3 style="margin:0;font-size:14px">Folders ZeroStore reads <span class="muted" style="font-weight:400">· and every folder inside them</span></h3>
+    {% if d.chosen %}
+    <ul class="list">
+      {% for f in d.chosen %}
+      <li><span class="m" style="flex:1;min-width:0;overflow-wrap:anywhere">{{ f.label }}</span>
+        <form method="post" action="/setup/google/folders">{{ csrf_field }}<input type="hidden" name="action" value="remove"><input type="hidden" name="value" value="{{ f.value }}"><input type="hidden" name="back" value="{{ here }}"><button class="btn small" type="submit">Remove</button></form></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted" style="margin:0">None yet. Add a folder below.</p>
+    {% endif %}
+  </div>
+  <div class="stack" style="gap:6px">
+    <div class="actions" aria-label="Where to look">
+      <a class="seg{% if d.folder == 'root' or d.path %} on{% endif %}" href="/setup?step=1&folder=root">My Drive</a>
+      <a class="seg{% if d.folder == 'shared' %} on{% endif %}" href="/setup?step=1&folder=shared">Shared with me</a>
+      <a class="seg{% if d.folder == 'drives' %} on{% endif %}" href="/setup?step=1&folder=drives">Shared drives</a>
+    </div>
+    {% if d.crumbs %}
+    <nav class="cmd" aria-label="Folder path"><a href="/setup?step=1&folder=root">My Drive</a>{% for c in d.crumbs %} / {% if loop.last %}<b>{{ c.name }}</b>{% else %}{{ c.name }}{% endif %}{% endfor %}</nav>
+    {% endif %}
+    {% if d.error %}
+    <div class="flash warn" role="alert">{{ d.error }}</div>
+    {% elif d.rows %}
+    <ul class="list">
+      {% for r in d.rows %}
+      <li><a href="{{ r.open }}" style="flex:1;min-width:0;overflow-wrap:anywhere">▸ {{ r.name }}</a>
+        {% if r.value in chosen %}<span class="cmd ok">added</span>{% else %}
+        <form method="post" action="/setup/google/folders">{{ csrf_field }}<input type="hidden" name="value" value="{{ r.value }}"><input type="hidden" name="label" value="{{ r.label }}"><input type="hidden" name="back" value="{{ here }}"><button class="btn small" type="submit">Add</button></form>
+        {% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted" style="margin:0">No folders here.</p>
+    {% endif %}
+  </div>
+  {% elif d.client %}
+  {% if d.local %}
+  <div><a class="btn go" href="/setup/google/start" hx-boost="false">Sign in with Google Drive</a></div>
+  <span class="cmd">read-only access · ZeroStore never edits your files</span>
+  {% else %}
+  <ol class="stack" style="margin:0;padding-left:20px">
+    <li><a class="btn go" href="/setup/google/start" target="_blank" rel="noopener" hx-boost="false">Sign in with Google Drive</a> <span class="cmd">opens a new tab · read-only access</span></li>
+    <li><div class="stack">
+      <span>Google finishes on an address starting with <code>{{ d.redirect_uri }}</code> that doesn't load, because ZeroStore runs on another machine. Copy that address from the browser's address bar and paste it here.</span>
+      <form method="post" action="/setup/google/paste" class="actions" style="align-items:end">{{ csrf_field }}
+        <label style="flex:1 1 260px"><span>Address</span><input class="f m" type="text" name="address" autocomplete="off" required></label>
+        <button class="btn go" type="submit">Finish signing in</button>
+      </form>
+    </div></li>
+  </ol>
+  {% endif %}
+  {% endif %}
+  {% if not d.client or not d.client.builtin %}
+  <details class="more"{% if not d.client %} open{% endif %}>
+    <summary>{% if d.client %}Change your Google sign-in app{% else %}Signing in with Google needs a Google sign-in app first{% endif %}</summary>
+    <div class="stack" style="margin-top:10px">
+      <ol class="muted" style="margin:0;padding-left:20px">
+        <li>In the Google Cloud console, pick or create a project and turn on the Google Drive API.</li>
+        <li>Set up the OAuth consent screen (External) and add your Google account as a test user.</li>
+        <li>Create an OAuth client ID with application type <b>Desktop app</b>.</li>
+        <li>Paste its client ID and secret here. They're saved in secrets.env next to zerostore.yaml, readable only by you.</li>
+      </ol>
+      <form method="post" action="/setup/google/client" class="grid" style="align-items:end">{{ csrf_field }}
+        <label><span>Client ID</span><input class="f m" type="text" name="client_id" autocomplete="off" required placeholder="…apps.googleusercontent.com"></label>
+        <label><span>Client secret</span><input class="f" type="password" name="client_secret" autocomplete="off" required></label>
+        <div><button class="btn" type="submit">Save</button></div>
+      </form>
+    </div>
+  </details>
+  {% endif %}
+  <details class="more">
+    <summary>GitHub, Linear, or a Google service account</summary>
+    <form method="post" action="/settings" class="stack" style="margin-top:10px">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><input type="hidden" name="sections" value="sources"><input type="hidden" name="back" value="/setup?step=2">
+      {% include "_sources.html" %}
+      <div><button class="btn go" type="submit">Save</button></div>
+    </form>
+  </details>
   {% elif step == 2 %}
   <h2 style="margin:0;font-size:16px">librarian <span class="muted" style="font-weight:400">· the AI that judges what changed</span></h2>
   <p style="margin:0" class="muted">Without an AI key every change is applied as it is. With one, ZeroStore leaves out small talk, spots when a newer document changes an older answer, and asks you when it isn't sure.</p>
