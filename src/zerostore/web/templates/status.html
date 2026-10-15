@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Status · ZeroStore{% endblock %}
+{% block content %}
+{% set last = status.last_sync %}
+<section class="split">
+  <div>
+    <div style="font-size:18px;font-weight:600">
+      {% if not status.sources %}Nothing connected yet. <a href="/setup">Set up your sources</a>.
+      {% elif not last %}Connected, not synced yet. Run the first sync.
+      {% elif not last.ok %}<span class="warn">The last sync had problems.</span> {{ last.summary }}
+      {% else %}Up to date. {{ last.changes|length }} change{{ "" if last.changes|length == 1 else "s" }} in the last sync:
+        <span class="ok">{{ last.applied }} applied</span>{% if last.waiting %}, {{ last.waiting }} sent to review{% endif %}.
+        {% if status.waiting %}<a href="/review" class="warn">{{ status.waiting }} need{{ "s" if status.waiting == 1 else "" }} you.</a>{% endif %}
+      {% endif %}
+    </div>
+    <div class="cmd">
+      {% if last %}last sync {{ local_time(last.finished_at) }}{% if last.judged %} · judged {{ last.judged }} in {{ last.judge_seconds }}s{% endif %} · {% endif %}
+      {% if status.next_sync %}next {{ local_time(status.next_sync, "%m-%d %H:%M") }}{% endif %}
+      · {{ status.documents }} documents, {{ status.chunks }} facts
+    </div>
+    {% if sync_result and not syncing %}<div class="cmd {{ 'ok' if sync_result.ok else 'warn' }}">{{ sync_result.text }}</div>{% endif %}
+    {% if last and last.problems %}
+    <ul class="list">{% for p in last.problems %}<li class="cmd warn">{{ p.source }}: {{ p.error or p.warning or (p.failed ~ " documents failed") }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+    {% if syncing %}
+      <button type="button" class="btn go" disabled>Syncing…</button>
+      <span id="sync-state" class="cmd" hx-get="/sync/state" hx-trigger="every 1s" hx-swap="outerHTML">syncing…</span>
+    {% else %}
+      <form method="post" action="/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="btn go"{% if not status.sources %} disabled{% endif %}>Sync now</button></form>
+      <span class="cmd">$ zerostore sync</span>
+    {% endif %}
+  </div>
+</section>
+
+<div class="row" style="align-items:flex-start">
+  <section class="box">
+    <h2>needs you ({{ status.waiting }})</h2>
+    {% if review %}
+    <ul class="list">
+      {% for r in review %}
+      <li><span class="tag {{ 'ok' if r.tag == 'proposal' else 'warn' }}">{{ r.tag }}</span><a href="/review?item={{ r.id }}" style="flex:1;color:var(--text);text-decoration:none">{{ r.title }}</a></li>
+      {% endfor %}
+    </ul>
+    <a class="btn" href="/review" style="margin-top:10px">Open review</a>
+    {% else %}
+    <p class="muted" style="margin:0">Nothing waits for you.</p>
+    {% endif %}
+  </section>
+  <section class="box scroll">
+    <h2>connected</h2>
+    <table class="nowrap">
+      <thead><tr><th>what</th><th>status</th><th>detail</th></tr></thead>
+      <tbody>
+        {% for s in status.sources %}
+        <tr><td>{{ source_names.get(s.name, s.name) }}</td><td class="ok">ok</td><td>{{ s.documents }} docs · {{ s.chunks }} facts{% if s.confidential %} · {{ s.confidential }} confidential{% endif %}</td></tr>
+        {% endfor %}
+        {% for t in status.tokens if t.level != "owner" %}
+        <tr><td>{{ t.name }}</td>{% if t.questions_24h %}<td class="ok">ok</td>{% else %}<td class="muted">idle</td>{% endif %}<td>{{ t.level }} · {% if t.questions_24h %}{{ t.questions_24h }} q/24h{% elif t.last_used_at %}last {{ local_time(t.last_used_at) }}{% else %}not used yet{% endif %}</td></tr>
+        {% endfor %}
+        {% if not status.tokens|selectattr("level", "ne", "owner")|list %}<tr><td colspan="3" class="muted">No agents yet. <a href="/setup?step=3">Connect one</a>.</td></tr>{% endif %}
+      </tbody>
+    </table>
+    <div class="cmd" style="margin-top:8px">judge: {{ status.engine }} · search: {{ status.embedder }}</div>
+  </section>
+</div>
+
+<div class="charts">
+  <section class="box"><h2>changes per day</h2>{{ figures.changes }}</section>
+  <section class="box"><h2>decisions by outcome · 14 days</h2>{{ figures.outcomes }}</section>
+  <section class="box"><h2>how sure the librarian was</h2>{{ figures.confidence }}</section>
+  <section class="box"><h2>questions per day</h2>{{ figures.questions }}</section>
+  <section class="box"><h2>median search time</h2>{{ figures.latency }}</section>
+</div>
+
+<section class="box">
+  <div class="split"><h2 style="margin:0">log</h2><a class="cmd" href="/log" style="color:var(--link)">full log →</a></div>
+  {% if recent %}
+  <div class="scroll"><table class="nowrap" style="margin-top:8px">
+    {% for r in recent %}{% include "_logrow.html" %}{% endfor %}
+  </table></div>
+  {% else %}<p class="muted" style="margin:8px 0 0">Nothing yet.</p>{% endif %}
+</section>
+{% endblock %}

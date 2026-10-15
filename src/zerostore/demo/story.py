@@ -231,4 +231,5 @@ def connect_help(demo: Demo, tokens: dict[str, str], teller: Teller, *, after_st
         )
     teller.say(f'  Sync:    zerostore sync -c "{config}"')
     teller.say(f'  Review:  zerostore review -c "{config}"')
+    teller.say(f"  Web UI:  {serve} --http --open")
     teller.say(f"  Remove:  {demo.command('remove')}")

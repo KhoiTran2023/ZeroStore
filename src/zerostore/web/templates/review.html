@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Review · ZeroStore{% endblock %}
+{% block content %}
+<div class="row" style="align-items:flex-start">
+  <section class="queue" aria-label="Waiting for you">
+    <div class="cmd" style="padding:10px 14px;border-bottom:1px solid var(--line)">{{ items|length }} waiting · current answers stay live until you decide</div>
+    {% for x in items %}
+    <a class="item{% if current and x.id == current.id %} sel{% endif %}" href="/review?item={{ x.id }}"{% if current and x.id == current.id %} aria-current="true"{% endif %}>
+      <span class="m {{ 'ok' if x.tag == 'proposal' else 'warn' }}" style="font-size:12px">{{ x.tag }} · {{ x.sure }}</span>
+      <span style="font-weight:600">{{ x.title }}</span>
+    </a>
+    {% else %}
+    <p class="muted" style="padding:14px;margin:0">Nothing waits for you. Low-confidence changes and agent proposals show up here.</p>
+    {% endfor %}
+  </section>
+  {% if current %}
+  <section class="detail">
+    <h1>{{ current.title }}</h1>
+    <p style="margin:0;color:var(--soft)">{{ current.why }}</p>
+    <div class="diff">
+      {% for b in current.before %}<div class="old"><span class="from">{{ b.document }}</span>
+- {{ b.text }}</div>{% else %}<div class="old">- (nothing yet)</div>{% endfor %}
+      {% for a in current.after %}<div class="new"><span class="from">{{ a.document }}</span>
++ {{ a.text }}</div>{% else %}<div class="new">+ {% if current.kind == "delete" %}{% if current.moved_to %}(now in {{ current.moved_to }}){% else %}(retired){% endif %}{% else %}(no new text){% endif %}</div>{% endfor %}
+    </div>
+    <div class="cmd">{{ current.meta }}{% if current.link %} · <a href="{{ current.link }}" target="_blank" rel="noopener noreferrer">open the source</a>{% endif %}</div>
+    <form method="post" action="/review/{{ current.id }}" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if current.kind == "agent_proposal" %}
+      <input type="hidden" name="original_fact" value="{{ current.fact }}">
+      <label><span>Fact to save <span class="hint">edit the wording before approving if you like</span></span><textarea class="f" name="fact">{{ current.fact }}</textarea></label>
+      {% endif %}
+      <div class="actions">
+        <button type="submit" name="decision" value="approve" class="btn go">{{ current.yes }}</button>
+        <button type="submit" name="decision" value="reject" class="btn">{{ current.no }}</button>
+        <span class="cmd">$ zerostore review approve {{ current.id }}</span>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

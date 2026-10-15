@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false}'>
+<title>{% block title %}ZeroStore{% endblock %}</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body hx-boost="true"{% if csrf %} hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% endif %}>
+<header class="top">
+  <span class="brand"><img src="/static/logo.svg" width="22" height="22" alt=""><b>zerostore</b>{% block brand_extra %}{% endblock %}</span>
+  {% block nav %}
+  {% if session %}
+  <nav class="nav" aria-label="Sections">
+    <a href="/status"{% if page == "status" %} class="on" aria-current="page"{% endif %}>status</a>
+    <a href="/review"{% if page == "review" %} class="on" aria-current="page"{% endif %}>review{% if waiting %} <span class="warn">{{ waiting }}</span>{% endif %}</a>
+    <a href="/log"{% if page == "log" %} class="on" aria-current="page"{% endif %}>log</a>
+    <a href="/settings"{% if page == "settings" %} class="on" aria-current="page"{% endif %}>settings</a>
+  </nav>
+  {% endif %}
+  {% endblock %}
+  {% if session %}
+  <span class="right">
+    <span class="cmd"><span class="ok">●</span> {% if loopback %}running on this computer{% else %}running{% endif %}</span>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="linkish" type="submit">sign out</button></form>
+  </span>
+  {% endif %}
+</header>
+<main class="{% block main_class %}{% endblock %}">
+  {% for f in flash %}
+  <div class="flash {{ f.kind }}" role="status">
+    {{ f.text }}
+    {% if f.token %}
+    <div class="stack" style="margin-top:10px">
+      <div class="copyable"><pre class="copy" id="new-token">{{ f.token }}</pre><span><button type="button" class="btn small" data-copy="new-token">Copy token</button></span></div>
+      {% include "_connect.html" %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

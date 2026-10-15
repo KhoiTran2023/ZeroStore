@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Columns added after a table first shipped: (table, column, declaration).
 # CREATE TABLE IF NOT EXISTS leaves older files alone, so these are added on open.
@@ -24,6 +24,7 @@ _ADDED_COLUMNS = [
     ("review_queue", "doc_id", "TEXT"),
     ("documents", "rejected_fingerprint", "TEXT"),
     ("documents", "source_deleted_at", "TEXT"),
+    ("access_log", "duration_ms", "INTEGER"),
 ]
 
 _SCHEMA = """
@@ -265,12 +266,23 @@ class StateDB:
 
     # Access log -----------------------------------------------------------
 
-    def log_access(self, token_id: str | None, action: str, detail: str | None, allowed: bool) -> None:
+    def log_access(self, token_id: str | None, action: str, detail: str | None, allowed: bool) -> int:
         with self.tx() as cur:
             cur.execute(
                 "INSERT INTO access_log (at, token_id, action, detail, allowed) VALUES (?, ?, ?, ?, ?)",
                 (utcnow(), token_id, action, detail, int(allowed)),
             )
+            return int(cur.lastrowid or 0)
+
+    def access_took(self, row_id: int, duration_ms: int) -> None:
+        """How long a logged request took to answer (searches, for the status charts)."""
+        with self.tx() as cur:
+            cur.execute("UPDATE access_log SET duration_ms = ? WHERE id = ?", (duration_ms, row_id))
+
+    def delete_meta(self, key: str) -> bool:
+        with self.tx() as cur:
+            cur.execute("DELETE FROM meta WHERE key = ?", (key,))
+            return cur.rowcount > 0
 
     # Audit table ----------------------------------------------------------
 

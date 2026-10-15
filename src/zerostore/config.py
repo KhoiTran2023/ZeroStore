@@ -1,14 +1,16 @@
 """Reads and checks zerostore.yaml.
 
 Only `sources` is required; everything else has a default. Values written as
-`${NAME}` are filled in from environment variables, so API keys never have to
-live in the file itself.
+`${NAME}` are filled in from environment variables, or from `secrets.env` next
+to the config file (where the web UI saves keys), so API keys never have to
+live in the file itself. A real environment variable wins over secrets.env.
 """
 
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 DEFAULT_HOME = Path("~/.zerostore")
 CONFIG_FILENAME = "zerostore.yaml"
+SECRETS_FILENAME = "secrets.env"
+OWNER_TOKEN_FILE = "owner-token"  # written by `zerostore init`, next to the config
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -139,6 +143,11 @@ class RetrievalSettings(_Section):
     rerank_with: Literal["auto", "jev", "llm", "local", "off"] = "auto"
     topics: list[str] = Field(default_factory=lambda: list(DEFAULT_TOPICS))
 
+    @field_validator("narrow_with", "rerank_with", mode="before")
+    @classmethod
+    def _bare_off(cls, value: Any) -> Any:
+        return "off" if value is False else value  # YAML reads a bare `off` as false
+
     @field_validator("topics")
     @classmethod
     def _some_topics(cls, topics: list[str]) -> list[str]:
@@ -219,34 +228,62 @@ class Config(_Section):
         return Path(self.demo).expanduser() if self.demo else None
 
 
-def expand_env(value: Any) -> Any:
+def expand_env(value: Any, env: Mapping[str, str] | None = None) -> Any:
     """Replace `${NAME}` with the environment variable NAME, recursively.
 
     A variable that isn't set becomes None when it is the whole value (so an
     optional key like `jev_api_key: ${JEV_API_KEY}` simply counts as unset) and
     an error when it is part of a longer string.
     """
+    env = os.environ if env is None else env
     if isinstance(value, dict):
-        return {k: expand_env(v) for k, v in value.items()}
+        return {k: expand_env(v, env) for k, v in value.items()}
     if isinstance(value, list):
-        return [expand_env(v) for v in value]
+        return [expand_env(v, env) for v in value]
     if not isinstance(value, str):
         return value
 
     whole = _ENV_PATTERN.fullmatch(value)
     if whole:
-        return os.environ.get(whole.group(1)) or None
+        return env.get(whole.group(1)) or None
 
     def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
-        if name not in os.environ:
+        if name not in env:
             raise ConfigError(f"environment variable {name} is used in zerostore.yaml but is not set")
-        return os.environ[name]
+        return env[name]
 
     return _ENV_PATTERN.sub(_sub, value)
 
 
-def parse_config(data: Any) -> Config:
+def read_secrets(path: Path) -> dict[str, str]:
+    """NAME=value lines from a secrets.env file; blank lines and # comments are skipped."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ConfigError(f"can't read {path}: {exc}") from None
+    secrets = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            secrets[name] = value
+    return secrets
+
+
+def config_env(config_path: Path) -> dict[str, str]:
+    """secrets.env next to the config, overridden by the real environment."""
+    return {**read_secrets(config_path.parent / SECRETS_FILENAME), **os.environ}
+
+
+def parse_config(data: Any, env: Mapping[str, str] | None = None) -> Config:
     if data is None:
         data = {}
     if not isinstance(data, dict):
@@ -256,7 +293,7 @@ def parse_config(data: Any) -> Config:
     if data["sources"] is None:
         data = {**data, "sources": {}}
     try:
-        return Config.model_validate(expand_env(data))
+        return Config.model_validate(expand_env(data, env))
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(p) for p in err['loc']) or 'config'}: {err['msg']}" for err in exc.errors()
@@ -279,12 +316,16 @@ def home_dir() -> Path:
     return Path(os.environ.get("ZEROSTORE_HOME", str(DEFAULT_HOME))).expanduser()
 
 
+def resolve_config_path(path: Path | str | None = None) -> Path:
+    return Path(path).expanduser() if path else default_config_path()
+
+
 def load_config(path: Path | str | None = None) -> Config:
-    path = Path(path).expanduser() if path else default_config_path()
+    path = resolve_config_path(path)
     if not path.exists():
         raise ConfigError(f"no config found at {path}. Run `zerostore init` to create one.")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path} is not valid YAML: {exc}") from None
-    return parse_config(data)
+    return parse_config(data, config_env(path))

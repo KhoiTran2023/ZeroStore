@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Sign in · ZeroStore{% endblock %}
+{% block main_class %}login{% endblock %}
+{% block content %}
+<h1 class="m" style="font-size:20px">Sign in to ZeroStore</h1>
+{% if error %}<div class="flash warn" role="alert">{{ error }}</div>{% endif %}
+<p class="muted" style="margin:0">Open the sign-in link that <code>zerostore serve --http</code> printed, or run <code>zerostore ui</code> for a fresh one. Or paste your owner token: <code>zerostore init</code> saved it in <code>owner-token</code> next to {{ config_path }}.</p>
+<form method="post" action="/login" class="stack" hx-boost="false">
+  <label><span>Owner token</span><input class="f m" type="password" name="token" autocomplete="off" required autofocus></label>
+  <div><button class="btn go" type="submit">Sign in</button></div>
+</form>
+{% endblock %}

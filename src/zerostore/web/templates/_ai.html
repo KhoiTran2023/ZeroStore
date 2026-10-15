@@ -1,0 +1,17 @@
+{# AI fields, shared by settings and setup. #}
+{% set ai = v.config.ai %}
+<div class="grid">
+  <label><span>Your AI</span><select class="f" name="llm_provider">
+    <option value="">none</option>
+    {% for p in v.providers %}<option value="{{ p }}"{% if ai.llm_provider == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+  </select></label>
+  <label><span>Model <span class="hint">mid-tier picks a balanced one</span></span><input class="f m" type="text" name="llm_model" value="{{ ai.llm_model }}"></label>
+  <label><span>API key <span class="hint">{{ v.llm_key }}</span></span><input class="f" type="password" name="llm_key" autocomplete="off" placeholder="leave blank to keep"></label>
+  <label><span>Jev key <span class="hint">optional, much faster · {{ v.jev_key }}</span></span><input class="f" type="password" name="jev_key" autocomplete="off" placeholder="leave blank to keep"></label>
+  <label><span>Judge changes with</span><select class="f" name="decision_engine">
+    {% if ai.decision_engine == "demo" %}<option value="demo" selected>the demo judge</option>{% endif %}
+    <option value="jev"{% if ai.decision_engine == "jev" %} selected{% endif %}>Jev when its key is set, else your AI</option>
+    <option value="llm"{% if ai.decision_engine == "llm" %} selected{% endif %}>your AI</option>
+  </select></label>
+</div>
+<span class="cmd">keys are saved in secrets.env next to {{ config_path }}, readable only by you</span>

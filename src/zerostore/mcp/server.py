@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
@@ -127,7 +128,16 @@ def tools_for(level: AccessLevel) -> set[str]:
     if level.can_propose:
         names.add("propose_fact")
     if level.is_owner:
-        names |= {"token_create", "token_list", "token_revoke", "review_list", "review_decide", "sync_now"}
+        names |= {
+            "token_create",
+            "token_list",
+            "token_revoke",
+            "review_list",
+            "review_decide",
+            "sync_now",
+            "status",
+            "activity",
+        }
     return names
 
 
@@ -152,7 +162,7 @@ def build_server(
     allowed = tools_for(only_level) if only_level else None
 
     from zerostore.librarian.retrieval import Retriever
-    from zerostore.librarian.review import ReviewError, decide, describe
+    from zerostore.librarian.review import ReviewError, before_after, decide, describe
 
     retriever = Retriever(zs, engines)
 
@@ -166,7 +176,8 @@ def build_server(
 
         return decorator
 
-    def authorize(ctx: Context, action: str, detail: str | None = None) -> TokenInfo:
+    def authorize_logged(ctx: Context, action: str, detail: str | None = None) -> tuple[TokenInfo, int]:
+        """Check the token and its level, and log the request. Returns the caller and the log row."""
         try:
             caller = zs.tokens.verify(token_source(ctx))
         except TokenError as exc:
@@ -175,18 +186,23 @@ def build_server(
         if action not in tools_for(caller.level):
             zs.state.log_access(caller.id, action, detail, allowed=False)
             raise ToolError(f"this token has the {caller.level.value} access level, which can't use {action}")
-        zs.state.log_access(caller.id, action, detail, allowed=True)
-        return caller
+        return caller, zs.state.log_access(caller.id, action, detail, allowed=True)
+
+    def authorize(ctx: Context, action: str, detail: str | None = None) -> TokenInfo:
+        return authorize_logged(ctx, action, detail)[0]
 
     # Read tools -----------------------------------------------------------
 
     @register("search", d.SEARCH, read_only=True)
     def search(query: str, ctx: Context) -> dict[str, Any]:
-        caller = authorize(ctx, "search", query[:200])
+        caller, row = authorize_logged(ctx, "search", query[:200])
+        started = time.perf_counter()
         try:
             answer = retriever.answer(query, include_confidential=caller.level.sees_confidential)
         except EmbeddingError as exc:
             raise ToolError(f"search is unavailable right now: {exc}") from None
+        finally:
+            zs.state.access_took(row, round((time.perf_counter() - started) * 1000))
         if answer.not_sure:
             return {
                 "answer": "not sure",
@@ -331,7 +347,11 @@ def build_server(
     @register("review_list", d.REVIEW_LIST, read_only=True)
     def review_list(ctx: Context) -> dict[str, Any]:
         authorize(ctx, "review_list")
-        return {"items": [describe(item) for item in zs.state.review_items("pending")]}
+        return {
+            "items": [
+                {**describe(item), **before_after(zs, item)} for item in zs.state.review_items("pending")
+            ]
+        }
 
     @register("review_decide", d.REVIEW_DECIDE, read_only=False)
     def review_decide(id: int, approve: bool, ctx: Context, fact: str | None = None) -> dict[str, Any]:
@@ -375,5 +395,21 @@ def build_server(
                 if r.error or r.warning or r.failed
             ],
         }
+
+    @register("status", d.STATUS, read_only=True)
+    def status(ctx: Context) -> dict[str, Any]:
+        from zerostore import insights
+
+        authorize(ctx, "status")
+        return insights.status(zs)
+
+    @register("activity", d.ACTIVITY, read_only=True)
+    def activity(ctx: Context, limit: int = 50, kind: str = "all") -> dict[str, Any]:
+        from zerostore import insights
+
+        authorize(ctx, "activity", kind)
+        if kind not in ("all", "changes", "questions"):
+            raise ToolError("kind must be 'all', 'changes' or 'questions'")
+        return {"items": insights.activity(zs, limit, kind)}
 
     return server

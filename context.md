@@ -29,7 +29,13 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Every `zerostore serve` process (one per stdio agent) opens LanceDB with a 1-second read-consistency interval, so a sync run by any other process reaches every connected agent within a second, without a restart. On S3 that costs one version check per process per second of reads.
 - `zerostore demo` is a separate install in `~/.zerostore/demo/` (port 8766, its own state, fact store and decisions file) for Pebble & Co., a made-up startup. Its config sets `demo: <folder>`, which makes every source (Google Drive, GitHub, Linear) read local files laid out like the real service (`company/<source>/<folder, repo or team>/...`, with a small `---` header for title, date and labels), so confidentiality rules, deletions and moves behave as they do for real. It judges with `ai.decision_engine: demo`, a scripted engine of word rules that is labelled "demo judge" everywhere (Jev instead when `JEV_API_KEY` is set), and uses `ai.embeddings: basic` (the hashing embedder), so it runs offline and plays out the same way every time. Its agents ask through the real MCP server with two default-level tokens. The demo only ever deletes a folder holding its `.zerostore-demo` marker, removes that marker last, and keeps the agents' tokens across `demo start` resets so connected agents keep working. `decision_engine: demo` is refused outside a demo config. Printed commands carry `--home` when the demo lives somewhere other than the default.
 - The demo company lives in `src/zerostore/demo/company/` rather than a top-level `demo/` folder (as the spec sketched) so it ships inside the package.
-- State schema v3 adds `review_queue.doc_id`, `documents.rejected_fingerprint` and `documents.source_deleted_at`; older files are upgraded on open. Older fact stores get the `superseded_by` column on open.
+- Web UI (`src/zerostore/web/`, mockup E): FastAPI + Jinja templates rendered on the server, with htmx 2.0.4 vendored in `static/` (0BSD license) and `hx-boost` on the body, so every page also works without JavaScript; no Node build and no web fonts (a local monospace stack). `zerostore serve --http` serves it at `/` next to `/mcp` through a small ASGI router (`mcp/http.py`), only when `web_ui: true`. It is an MCP client like any agent: each page calls the owner tools in-process (`web/owner.py`, `mcp.Client` against `build_server` with the session's owner token), so access checks and the access log apply. The owner's own page views (`status`, `activity`, `review_list`, `token_list`) are logged but left out of the activity list.
+- Web sign-in: only owner tokens. Either a one-time link printed by `serve --http` and `zerostore ui` (code stored as a SHA-256 hash in state `meta`, ten-minute expiry, single use; redeeming reads the `owner-token` file next to the config, then `~/.zerostore/owner-token`), or pasting an owner token. Sessions live in memory (a restart signs everyone out) behind an HttpOnly, SameSite=Strict cookie; every form carries a per-session CSRF token; POSTs from another origin are refused; on a loopback bind only localhost host names are accepted (DNS rebinding); responses carry a strict CSP and `X-Frame-Options: DENY`.
+- Web settings write `zerostore.yaml` directly with ruamel.yaml (comments and layout kept), checked by the same validation as `load_config` before anything is written, then replaced in one step with mode 600. Keys typed into the web UI go to `secrets.env` next to the config (mode 600) and the config refers to them as `${LLM_API_KEY}`, `${JEV_API_KEY}`, `${GITHUB_TOKEN}`, `${LINEAR_API_KEY}`; `load_config` fills `${NAME}` from the real environment first, then `secrets.env`. Keys are never shown back, only "set" or "not set". After a save the running server swaps in the new config, so syncs and thresholds use it at once; a new schedule, server addresses and new AI keys for search need a restart (the page says so). A bare YAML `off` for `narrow_with`/`rerank_with` now reads as "off".
+- Web charts are inline SVG drawn on the server (`web/charts.py`): changes per day (applied vs sent to review), decisions by outcome, confidence histogram with the auto-apply line, questions per day and median search time, each with a hover title per mark and a table twin. Two-series charts use the blue `#3987e5` and orange `#d95926` categorical slots, checked for colour-blind separation on the `#1A1D21` surface. Spend and the "Jev vs LLM" race from the spec aren't shown: there is no real cost or side-by-side timing data yet. Searches now record how long they took (`access_log.duration_ms`), and each sync records how many changes were judged and how long judging took (`SyncReport.judged`, `judge_seconds`).
+- Review items now carry `before` (what agents are told now: the document's text that would go away and other documents' facts it would hide) and `after` (the new text), for the review page and the `review_list` tool. There is no Undo yet; the mockup's Multi-Server switch is shown as a read-only servers table until split deployments exist; Sign in with Google is a later stage, so the setup page asks for a credentials file path.
+- `zerostore demo` also writes an owner token to the demo's own `owner-token` (kept across resets), so `zerostore serve -c <demo config> --http --open` signs straight in to the web UI on port 8766.
+- State schema v4 adds `access_log.duration_ms`. State schema v3 adds `review_queue.doc_id`, `documents.rejected_fingerprint` and `documents.source_deleted_at`; older files are upgraded on open. Older fact stores get the `superseded_by` column on open.
 
 ## Current state
 
@@ -37,7 +43,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Stage 2 (sources and sync, merged): Google Drive, GitHub and Linear connectors; Markdown-aware chunking; ingestion that adds, updates and retires documents with audit rows; `zerostore sync`; timed syncs in `serve`; owner-only `sync_now` MCP tool; last sync shown in `zerostore status`.
 - Stage 3 (the librarian's judgment): decision engine with Jev, LLM and local backends; noise filtering and topic tags at ingestion; confidence, the review queue and superseding in the update layer; judged deletions; retrieval with narrowing, reranking and "not sure"; proposals with in-app approval and `decisions.md`; provider embeddings; `zerostore review` and `zerostore reindex`. The Jev and LLM backends are tested against fake APIs only, not live accounts.
 - Stage 4 (`zerostore demo`): Pebble & Co. with simulated Google Drive, GitHub and Linear sources; the scripted demo judge; `zerostore demo` plays the story (two agents, the CEO's $20 to $29 change, the stale Sales FAQ hidden, a "maybe we drop the free tier?" note waiting at 0.54); `demo start`, `change-price`, `add-note` and `remove` step through it with real agents. Also fixed: long-running servers now see syncs made by other processes.
-- Next stages: web UI in the mockup E design; installer and service setup; a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
+- Stage 5 (web UI): setup, status (with charts), review, log and settings pages in the mockup E design, served by `zerostore serve --http`; sign-in by one-time link (`zerostore ui`) or owner token; owner MCP tools `status` and `activity`; keys saved to `secrets.env`.
+- Next stages: installer and service setup; a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
 
 ## Working on it
 
@@ -60,8 +67,9 @@ ZeroStore/
 ├── src/zerostore/
 │   ├── __init__.py           Version
 │   ├── app.py                Opens config, state, tokens and fact store together; picks the embedder
-│   ├── cli.py                init, serve, sync, review, reindex, token, status, connect, demo
-│   ├── config.py             Reads and checks zerostore.yaml (env-var expansion, defaults, clear errors)
+│   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, connect, demo
+│   ├── config.py             Reads and checks zerostore.yaml (env-var and secrets.env expansion, defaults, clear errors)
+│   ├── insights.py           Read-only numbers for the status page and the status/activity tools
 │   ├── access/
 │   │   └── tokens.py         Access levels; token create, verify, list, revoke, auto-approve
 │   ├── agents/
@@ -96,14 +104,22 @@ ZeroStore/
 │   ├── mcp/
 │   │   ├── descriptions.py   Server instructions, tool descriptions and the agent rule line
 │   │   ├── server.py         The MCP server: tools, per-call token and level checks, access logging
-│   │   └── http.py           Streamable HTTP app with bearer-token check at the door
+│   │   └── http.py           Streamable HTTP app with bearer-token check at the door, routed next to the web UI
+│   ├── web/
+│   │   ├── app.py            Routes and pages: sign-in, status, review, log, settings, tokens, setup, sync
+│   │   ├── auth.py           One-time login codes, in-memory sessions, CSRF and host-name checks
+│   │   ├── owner.py          Calls the owner MCP tools in-process with the signed-in token
+│   │   ├── settings.py       Reads and rewrites zerostore.yaml (ruamel.yaml) and secrets.env
+│   │   ├── charts.py         Server-side SVG charts with table twins
+│   │   ├── templates/        Jinja pages and partials (base, status, review, log, settings, setup, login)
+│   │   └── static/           style.css, htmx.min.js (vendored), app.js (copy buttons), logo.svg
 │   └── store/
 │       ├── facts.py          LanceDB fact store: replace/delete documents, superseding, hybrid search, access filters
 │       ├── state.py          SQLite state: tokens, access log, audit, review queue, documents, locks, meta
 │       └── embeddings.py     Embedder interface, provider embeddings, local fastembed model, hashing fallback
 └── tests/                    Tests: config, tokens, fact store, state, MCP server (in-process, HTTP, stdio), CLI,
                               rules, connectors and engines (fake APIs), chunking, ingestion, the librarian's
-                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo
+                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI
 ```
 
 ## What each folder contains
@@ -118,5 +134,8 @@ ZeroStore/
 - `src/zerostore/librarian/`: the librarian's three layers: ingestion (with chunking), update (judgment and the review queue) and retrieval, plus review decisions.
 - `src/zerostore/scheduler/`: timed syncs.
 - `src/zerostore/mcp/`: the one door, the MCP server, plus everything agents read from it.
+- `src/zerostore/web/`: the web UI: pages, sign-in, settings writing and charts, with its templates and static files.
+- `src/zerostore/web/templates/`: the server-rendered pages; files starting with `_` are partials shared between pages.
+- `src/zerostore/web/static/`: the stylesheet, vendored htmx, the copy-button script and the logo.
 - `src/zerostore/store/`: where data lives: the LanceDB fact store, the SQLite state database and embeddings.
 - `tests/`: the pytest suite, using temporary folders, made-up company documents, fake source and AI APIs, and a scripted decision engine (`fakes.py`).

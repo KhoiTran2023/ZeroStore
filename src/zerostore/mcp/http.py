@@ -1,4 +1,4 @@
-"""Serving the MCP server over HTTP (streamable HTTP at /mcp).
+"""Serving the MCP server over HTTP (streamable HTTP at /mcp), with the web UI at /.
 
 Every request to /mcp must carry a valid `Authorization: Bearer <token>`;
 anything else gets a 401 before it reaches the MCP layer. Each tool call then
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+from pathlib import Path
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -69,7 +70,34 @@ async def _unauthorized(send: Send, message: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-def create_http_app(zs: ZeroStore, host: str = "127.0.0.1") -> ASGIApp:
+class Router:
+    """/mcp (and the server's lifespan) go to the MCP server; every other path to the web UI."""
+
+    def __init__(self, mcp: ASGIApp, web: ASGIApp):
+        self.mcp = mcp
+        self.web = web
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        if scope["type"] == "lifespan" or path == MCP_PATH or path.startswith(MCP_PATH + "/"):
+            await self.mcp(scope, receive, send)
+        else:
+            await self.web(scope, receive, send)
+
+
+def create_http_app(
+    zs: ZeroStore,
+    host: str = "127.0.0.1",
+    *,
+    config_path: Path | None = None,
+    mcp_url: str | None = None,
+) -> ASGIApp:
+    """The MCP server at /mcp, plus the web UI at / when `web_ui` is on and the config file is known."""
     server = build_server(zs, bearer_token_source)
     inner = server.streamable_http_app(streamable_http_path=MCP_PATH, host=host)
-    return BearerAuth(inner, zs.tokens)
+    mcp = BearerAuth(inner, zs.tokens)
+    if not (zs.config.web_ui and config_path):
+        return mcp
+    from zerostore.web.app import create_web_app
+
+    return Router(mcp, create_web_app(zs, config_path, bound_host=host, mcp_url=mcp_url))
