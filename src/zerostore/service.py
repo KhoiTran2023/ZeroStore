@@ -90,13 +90,15 @@ class Systemd:
     def __init__(self, scope: str = "user", run: Run = run, home: Path | None = None) -> None:
         self.scope = scope
         self.run = run
-        home = home or Path.home()
         if scope == "system":
             self.path = Path("/etc/systemd/system") / UNIT_NAME
             self.ctl = ["systemctl"]
             self.logs = f"journalctl -u {UNIT_NAME} -f"
         else:
-            config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+            if home is None:
+                config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+            else:
+                config_home = home / ".config"
             self.path = config_home / "systemd" / "user" / UNIT_NAME
             self.ctl = ["systemctl", "--user"]
             self.logs = f"journalctl --user -u {UNIT_NAME} -f"

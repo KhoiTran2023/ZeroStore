@@ -22,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_config_home(monkeypatch):
+    """Never let a test write or remove a real unit file (CI runners set XDG_CONFIG_HOME)."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+
 class FakeRun:
     """Answers commands from a table of (prefix -> (returncode, stdout)); records every call."""
 
