@@ -1,7 +1,7 @@
 """The `zerostore` command.
 
-Commands so far: init, serve, sync, review, reindex, token, status, connect
-and demo. Report and service arrive with later stages.
+Commands so far: init, serve, ui, sync, review, reindex, token, status,
+connect, demo and service. Report arrives with a later stage.
 
 Admin commands (init, token, status) work directly on this machine's state
 file: whoever can read ~/.zerostore already holds the owner token, and the
@@ -51,6 +51,11 @@ demo_app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(demo_app, name="demo")
+service_app = typer.Typer(
+    help="Keep `zerostore serve --http` running in the background: on boot (Linux) or login (macOS).",
+    no_args_is_help=True,
+)
+app.add_typer(service_app, name="service")
 
 
 CONFIG_TEMPLATE = """\
@@ -216,18 +221,11 @@ def serve(
         _serve_stdio(zs)
         return
 
-    from zerostore.mcp.http import create_http_app, is_loopback
+    from zerostore.mcp.http import create_http_app
 
     host = host or zs.config.servers.host
     port = port or zs.config.servers.port
-    if bool(tls_cert) != bool(tls_key):
-        _fail("pass both --tls-cert and --tls-key, or neither")
-    if not is_loopback(host) and not tls_cert and not behind_https_proxy:
-        _fail(
-            f"refusing to serve plain HTTP on {host}: tokens would cross the network unencrypted. "
-            "Pass --tls-cert/--tls-key, or --behind-https-proxy if Caddy, a load balancer or a tunnel "
-            "handles HTTPS in front."
-        )
+    _check_bind(host, tls_cert, tls_key, behind_https_proxy)
     import uvicorn
 
     scheme = "https" if tls_cert else "http"
@@ -236,7 +234,7 @@ def serve(
     config_path = resolve_config_path(config)
     if zs.config.web_ui:
         zs.state.set_meta(WEB_URL_KEY, base)  # for `zerostore ui`
-        if open_browser:
+        if open_browser and _can_open_browser():
             import threading
             import webbrowser
 
@@ -261,6 +259,19 @@ def serve(
 
 
 WEB_URL_KEY = "web_url"  # where `serve --http` last said the web UI is
+
+
+def _check_bind(host: str, tls_cert: Path | None, tls_key: Path | None, behind_https_proxy: bool) -> None:
+    from zerostore.mcp.http import is_loopback
+
+    if bool(tls_cert) != bool(tls_key):
+        _fail("pass both --tls-cert and --tls-key, or neither")
+    if not is_loopback(host) and not tls_cert and not behind_https_proxy:
+        _fail(
+            f"refusing to serve plain HTTP on {host}: tokens would cross the network unencrypted. "
+            "Pass --tls-cert/--tls-key, or --behind-https-proxy if Caddy, a load balancer or a tunnel "
+            "handles HTTPS in front."
+        )
 
 
 def _url_host(host: str) -> str:
@@ -300,10 +311,17 @@ def ui(
     zs.close()
     typer.echo(f"Sign in to the web UI: {link}")
     typer.echo("It works once, for ten minutes, while `zerostore serve --http` is running.")
-    if not no_open and "?code=" in link:
+    if not no_open and "?code=" in link and _can_open_browser():
         import webbrowser
 
         webbrowser.open(link)
+
+
+def _can_open_browser() -> bool:
+    """False on a Linux machine with no display (say, over ssh), where Python would start a text browser."""
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
 
 
 def _serve_stdio(zs) -> None:
@@ -733,6 +751,142 @@ def demo_remove(ctx: typer.Context, home: Path = DemoHome) -> None:
             typer.echo("There is no demo to remove.")
 
     _demo_run(go)
+
+
+@service_app.command("install")
+def service_install(
+    host: str = typer.Option(None, help="HTTP address to bind (default from config: localhost)."),
+    port: int = typer.Option(None, help="HTTP port (default from config: 8765)."),
+    tls_cert: Path = typer.Option(None, help="TLS certificate file, to serve HTTPS directly."),
+    tls_key: Path = typer.Option(None, help="TLS private key file."),
+    behind_https_proxy: bool = typer.Option(
+        False, help="Allow plain HTTP on a non-local address because a proxy in front terminates HTTPS."
+    ),
+    public_url: str = typer.Option(
+        None, help="The address people and agents use, e.g. https://zs.example.com (default: this machine)."
+    ),
+    config: Path = ConfigOption,
+) -> None:
+    """Run `zerostore serve --http` (agents, web UI and timed syncs) in the background.
+
+    Linux: a systemd user unit that starts on boot (or a system unit when run as root).
+    macOS: a launchd agent that starts when you log in. Running it again updates and restarts it.
+    """
+    from zerostore import service
+
+    config_path = resolve_config_path(config).absolute()
+    zs = _open(config_path)
+    cfg = zs.config
+    zs.close()
+    bind = host or cfg.servers.host
+    bind_port = port or cfg.servers.port
+    _check_bind(bind, tls_cert, tls_key, behind_https_proxy)
+
+    # Only what was given here goes on the command line, so later edits to zerostore.yaml still apply.
+    args: list[str] = []
+    if host:
+        args += ["--host", host]
+    if port:
+        args += ["--port", str(port)]
+    if tls_cert:
+        args += [
+            "--tls-cert",
+            str(tls_cert.expanduser().absolute()),
+            "--tls-key",
+            str(tls_key.expanduser().absolute()),
+        ]
+    if behind_https_proxy:
+        args.append("--behind-https-proxy")
+    if public_url:
+        args += ["--public-url", public_url]
+    env = {"ZEROSTORE_HOME": str(home_dir().absolute())} if os.environ.get("ZEROSTORE_HOME") else {}
+    plan = service.Plan(config_path=config_path, host=bind, port=bind_port, serve_args=args, env=env)
+
+    missing = service.shell_only_variables(config_path)
+    if missing:
+        typer.secho(
+            f"Note: zerostore.yaml uses {', '.join(missing)} from this shell, which the service won't see. "
+            f"Put them in {config_path.parent / 'secrets.env'} (NAME=value lines; Settings in the web UI "
+            "saves keys there too).",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    try:
+        manager = service.detect()
+        replacing = manager.path.exists()
+        notes = service.install(manager, plan)
+    except service.ServiceError as exc:
+        _fail(str(exc))
+    base = (public_url or f"{'https' if tls_cert else 'http'}://{_url_host(bind)}:{bind_port}").rstrip("/")
+    state = manager.status()
+    typer.echo(
+        f"{'Updated and restarted' if replacing else 'Started'} ZeroStore in the background "
+        f"({manager.name}, starts {state.starts})."
+    )
+    if cfg.web_ui:
+        typer.echo(f"  Web UI:  {base}  (`zerostore ui` opens it signed in)")
+    typer.echo(f"  Agents:  {base}/mcp")
+    typer.echo(f"  Logs:    {manager.logs}")
+    typer.echo(f"  Service: {manager.path}")
+    for note in notes:
+        typer.echo(note)
+    typer.echo("Stop and remove it with `zerostore service uninstall`.")
+
+
+@service_app.command("uninstall")
+def service_uninstall() -> None:
+    """Stop the background service and remove it. Your settings and data stay where they are."""
+    from zerostore import service
+
+    try:
+        manager = service.detect()
+        removed = service.uninstall(manager)
+    except service.ServiceError as exc:
+        _fail(str(exc))
+    if removed:
+        typer.echo(
+            f"Stopped and removed the ZeroStore service ({manager.path}). "
+            "Your settings and data are untouched."
+        )
+    else:
+        typer.echo("The ZeroStore service isn't installed.")
+
+
+@service_app.command("status")
+def service_status(config: Path = ConfigOption) -> None:
+    """Whether the background service is installed and running, and where its logs are."""
+    from zerostore import service
+
+    try:
+        manager = service.detect()
+        manager.check()
+        state = manager.status()
+    except service.ServiceError as exc:
+        _fail(str(exc))
+    if not state.installed and not state.running:
+        typer.echo("The ZeroStore service isn't installed. Set it up with `zerostore service install`.")
+        raise typer.Exit(1)
+    running = f"running (pid {state.pid})" if state.running and state.pid else "running"
+    typer.echo(f"ZeroStore service: {running if state.running else f'not running ({state.detail})'}")
+    typer.echo(f"  Kind:    {manager.name}, starts {state.starts}")
+    web = _saved_web_url(config)
+    if web:
+        typer.echo(f"  Web UI:  {web}")
+    typer.echo(f"  Logs:    {state.logs}")
+    typer.echo(f"  Service: {state.path}")
+    if not state.running:
+        raise typer.Exit(1)
+
+
+def _saved_web_url(config: Path | None) -> str | None:
+    from zerostore.store.state import StateDB
+
+    try:
+        cfg = load_config(config)
+        path = cfg.servers.statedb_path()
+        return StateDB(path).get_meta(WEB_URL_KEY) if path.exists() else None
+    except Exception:  # status still answers when the settings are broken
+        return None
 
 
 def main() -> None:

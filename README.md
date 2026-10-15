@@ -4,7 +4,15 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, and the web UI. The one-line installer and Sign in with Google come next.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer and the background service. Sign in with Google comes next.
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh
+```
+
+On Linux or macOS, this installs the `zerostore` command (with uv, or with pipx if you already have it; uv brings Python 3.10 or newer when the machine has none), creates your settings and owner token in `~/.zerostore`, starts ZeroStore in the background and opens the setup page. Running it again updates ZeroStore and keeps your settings and data. While the repository is private, run it from a clone instead: `ZEROSTORE_PACKAGE=. sh install.sh`. `ZEROSTORE_NO_SERVICE=1` skips the background service and `ZEROSTORE_NO_OPEN=1` prints the setup link instead of opening it.
 
 ## Try it in 60 seconds
 
@@ -31,8 +39,8 @@ Then list your sources in `~/.zerostore/zerostore.yaml` and run `zerostore sync`
 ```yaml
 sources:
   google_drive: { folders: ["Company/Decisions"], credentials: ~/.zerostore/google-credentials.json }
-  github:       { repos: ["acme/app"], token: ${GITHUB_TOKEN} }
-  linear:       { teams: ["Product"], api_key: ${LINEAR_API_KEY} }
+  github:       { repos: ["acme/app"], token: "${GITHUB_TOKEN}" }
+  linear:       { teams: ["Product"], api_key: "${LINEAR_API_KEY}" }
 ```
 
 After that, `zerostore serve` also re-syncs on the schedule in your settings (daily at 06:00 by default), so agents always get the current version.
@@ -53,6 +61,24 @@ Serves agents at `/mcp` and opens the web UI at `http://localhost:8765`, signed 
 - **Settings:** a form and a YAML view of `zerostore.yaml`, plus tokens. Saves are checked before anything is written, comments in the file are kept, and keys go to `secrets.env` next to it (readable only by you), referred to as `${ZEROSTORE_LLM_API_KEY}` and so on.
 
 The web UI is a client of the MCP server like any agent: it calls the owner tools with your owner token, so every page is checked and logged. Only an owner token signs in, refused sign-ins are logged and limited to ten a minute, and revoking the token signs that browser out. On `localhost` it refuses other host names (DNS rebinding), every form carries a CSRF token, and the session lives in memory, so restarting `zerostore serve` signs you out. Settings you save apply to syncs (scheduled ones too) right away. Turn the web UI off with `web_ui: false`.
+
+## Keep it running
+
+```bash
+zerostore service install     # start on boot (Linux) or at login (macOS), and restart after a crash
+zerostore service status      # is it running, and where are its logs
+zerostore service uninstall   # stop and remove it; settings and data stay
+```
+
+On Linux it's a systemd user unit, and `install` turns on lingering so it starts on boot before anyone logs in (when it can't, it prints the one `sudo loginctl enable-linger` line); run as root, it's a system unit instead. On macOS it's a launchd agent that starts when you log in, logging to `~/.zerostore/logs/serve.log`. The service runs `zerostore serve --http` with the options you give `install` (`--host`, `--port`, `--behind-https-proxy`, `--public-url`, `--tls-cert`/`--tls-key`); everything else comes from `zerostore.yaml`. Running `install` again updates and restarts it.
+
+The service doesn't see your shell's environment variables, so keep keys in `secrets.env` next to `zerostore.yaml` (Settings in the web UI saves them there); `install` warns about any `${NAME}` in your settings that only your shell has.
+
+On an always-on server such as AWS EC2, put HTTPS in front (Caddy, a load balancer, or a Cloudflare or Tailscale tunnel) and run:
+
+```bash
+zerostore service install --host 0.0.0.0 --behind-https-proxy --public-url https://zs.example.com
+```
 
 ## The librarian's judgment
 
@@ -108,6 +134,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore token create / list / revoke` | Manages access tokens |
 | `zerostore status` | Shows what ZeroStore holds and what waits for review |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
+| `zerostore service install / status / uninstall` | Keeps `zerostore serve --http` running in the background (systemd or launchd) |
 | `zerostore demo` | Plays the Pebble & Co. story; `demo start`, `change-price`, `add-note` and `remove` step through it |
 
 See [`zerostore.example.yaml`](zerostore.example.yaml) for every setting.

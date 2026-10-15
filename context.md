@@ -35,6 +35,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Web charts are inline SVG drawn on the server (`web/charts.py`): changes per day (applied vs sent to review), decisions by outcome, confidence histogram with the auto-apply line, questions per day and median search time, each with a hover title per mark and a table twin. Two-series charts use the blue `#3987e5` and orange `#d95926` categorical slots, checked for colour-blind separation on the `#1A1D21` surface. Spend and the "Jev vs LLM" race from the spec aren't shown: there is no real cost or side-by-side timing data yet. Searches now record how long they took (`access_log.duration_ms`), and each sync records how many changes were judged and how long judging took (`SyncReport.judged`, `judge_seconds`).
 - Review items now carry `before` (what agents are told now: the document's text that would go away and other documents' facts it would hide) and `after` (the new text), for the review page and the `review_list` tool. There is no Undo yet; the mockup's Multi-Server switch is shown as a read-only servers table until split deployments exist; Sign in with Google is a later stage, so the setup page asks for a credentials file path.
 - `zerostore demo` also writes an owner token to the demo's own `owner-token` (kept across resets), so `zerostore serve -c <demo config> --http --open` signs straight in to the web UI on port 8766.
+- Background service (`zerostore service`, `src/zerostore/service.py`): a systemd user unit on Linux (`~/.config/systemd/user/zerostore.service`; `install` turns on lingering with `loginctl enable-linger` so it starts on boot, or prints the `sudo` line when refused), a system unit when run as root, and a launchd agent on macOS (`~/Library/LaunchAgents/zerostore.serve.plist`, label `zerostore.serve`, logs in `<config folder>/logs/serve.log`, starts at login). It runs `<this python> -m zerostore serve --http --config <absolute path>` (the interpreter path is kept unresolved so a pipx/uv venv survives upgrades) plus only the options given to `install`, so `zerostore.yaml` stays in charge of the rest. `install` stops an existing service first, refuses a port something else is listening on, waits up to 30 seconds for the port to answer, and warns about `${NAME}`s that only the current shell has (the service reads `secrets.env`, not the shell). Every command goes through an injectable runner, so tests never touch the real service manager; the CI `install` job does a real install on Ubuntu (systemd) and macOS (launchd).
+- `install.sh` (POSIX sh, shellcheck-clean): installs with uv, else pipx with a Python 3.10+, else installs uv first (uv fetches Python when needed); `ZEROSTORE_PACKAGE` overrides what is installed (default `git+https://github.com/KhoiTran2023/ZeroStore` until the package is on PyPI), `ZEROSTORE_NO_SERVICE=1` and `ZEROSTORE_NO_OPEN=1` skip steps. Then `zerostore init --no-rule`, `zerostore service install` (if that fails, it prints `zerostore serve --http --open` and carries on), and `zerostore ui`. `zerostore ui` and `serve --open` don't open a browser on Linux without a display (Python would start a text browser over ssh). An empty `ZEROSTORE_HOME` counts as unset.
 - State schema v4 adds `access_log.duration_ms`. State schema v3 adds `review_queue.doc_id`, `documents.rejected_fingerprint` and `documents.source_deleted_at`; older files are upgraded on open. Older fact stores get the `superseded_by` column on open.
 
 ## Current state
@@ -44,7 +46,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Stage 3 (the librarian's judgment): decision engine with Jev, LLM and local backends; noise filtering and topic tags at ingestion; confidence, the review queue and superseding in the update layer; judged deletions; retrieval with narrowing, reranking and "not sure"; proposals with in-app approval and `decisions.md`; provider embeddings; `zerostore review` and `zerostore reindex`. The Jev and LLM backends are tested against fake APIs only, not live accounts.
 - Stage 4 (`zerostore demo`): Pebble & Co. with simulated Google Drive, GitHub and Linear sources; the scripted demo judge; `zerostore demo` plays the story (two agents, the CEO's $20 to $29 change, the stale Sales FAQ hidden, a "maybe we drop the free tier?" note waiting at 0.54); `demo start`, `change-price`, `add-note` and `remove` step through it with real agents. Also fixed: long-running servers now see syncs made by other processes.
 - Stage 5 (web UI): setup, status (with charts), review, log and settings pages in the mockup E design, served by `zerostore serve --http`; sign-in by one-time link (`zerostore ui`) or owner token; owner MCP tools `status` and `activity`; keys saved to `secrets.env`.
-- Next stages: installer and service setup; a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
+- Stage 6 (installer and service): `install.sh` and `zerostore service install / status / uninstall` (systemd and launchd), with a CI job that installs for real on Linux and macOS.
+- Next stages: a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
 
 ## Working on it
 
@@ -61,15 +64,18 @@ ZeroStore/
 ├── LICENSE                   Apache License 2.0
 ├── pyproject.toml            Package info, dependencies, the `zerostore` command, ruff and pytest settings
 ├── zerostore.example.yaml    Every setting, with comments
+├── install.sh                The one-line installer: installs with uv or pipx, sets up, starts the service, opens the setup page
 ├── .gitignore                Files git should not track
 ├── .github/
-│   └── workflows/ci.yml      Lint and tests on every push and pull request
+│   └── workflows/ci.yml      Lint and tests on every push and pull request, plus a real install on Linux and macOS
 ├── src/zerostore/
 │   ├── __init__.py           Version
 │   ├── app.py                Opens config, state, tokens and fact store together; picks the embedder
-│   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, connect, demo
+│   ├── __main__.py           `python -m zerostore`, which the background service runs
+│   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, connect, demo, service
 │   ├── config.py             Reads and checks zerostore.yaml (env-var and secrets.env expansion, defaults, clear errors)
 │   ├── insights.py           Read-only numbers for the status page and the status/activity tools
+│   ├── service.py            `zerostore service`: the systemd unit or launchd agent that keeps `serve --http` running
 │   ├── access/
 │   │   └── tokens.py         Access levels; token create, verify, list, revoke, auto-approve
 │   ├── agents/
@@ -119,12 +125,14 @@ ZeroStore/
 │       └── embeddings.py     Embedder interface, provider embeddings, local fastembed model, hashing fallback
 └── tests/                    Tests: config, tokens, fact store, state, MCP server (in-process, HTTP, stdio), CLI,
                               rules, connectors and engines (fake APIs), chunking, ingestion, the librarian's
-                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI
+                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI,
+                              service and install.sh (faked service manager)
 ```
 
 ## What each folder contains
 
 - `.github/workflows/`: continuous integration.
+- Repository root: `install.sh`, the one-line installer, sits here so it can be fetched from a raw GitHub URL.
 - `src/zerostore/`: the Python package behind the `zerostore` command.
 - `src/zerostore/access/`: tokens and access levels.
 - `src/zerostore/agents/`: edits to agent settings files (the "check ZeroStore first" line).
