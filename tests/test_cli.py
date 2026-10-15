@@ -122,3 +122,87 @@ def test_serve_stdio_needs_a_valid_token(home, monkeypatch):
     result = zs("serve")
     assert result.exit_code == 1
     assert "ZEROSTORE_TOKEN" in result.output
+
+
+def setup_review_items(home):
+    """Init, then queue one change and one proposal straight through the library."""
+    from fakes import FakeConnector, FakeEngine
+
+    from zerostore.app import ZeroStore
+    from zerostore.config import GoogleDriveSource, load_config
+    from zerostore.librarian.ingestion import Ingestor
+    from zerostore.store.embeddings import HashingEmbedder
+
+    zs("init", "--no-rule")
+    store = ZeroStore.open(load_config(home / "zerostore.yaml"), embedder=HashingEmbedder())
+    store.config.sources.google_drive = GoogleDriveSource(folders=["Company"])
+    drive, engine = FakeConnector(), FakeEngine()
+    engine.keep_default = 0.6
+    drive.put("pricing", "Pricing 2026", "The Pro plan costs $29 per month.")
+    Ingestor(store, lambda n, c: drive, judge=engine).sync()
+    store.state.add_review_item(
+        "agent_proposal", {"fact": "Refunds: 30 days.", "quote": "q"}, created_by="cursor"
+    )
+    store.close()
+
+
+def test_review_list_approve_and_reject(home, monkeypatch):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    setup_review_items(home)
+    listed = zs("review")
+    assert listed.exit_code == 0, listed.output
+    assert "[1] Added: Pricing 2026 (google_drive) · confidence 0.60" in listed.output
+    assert "[2] Proposed fact: Refunds: 30 days." in listed.output
+    approved = zs("review", "approve", "2", "--fact", "Refunds are allowed within 30 days.")
+    assert approved.exit_code == 0, approved.output
+    assert "Approved 2: saved; agents can find it now." in approved.output
+    assert "within 30 days" in (home / "decisions.md").read_text()
+    rejected = zs("review", "reject", "1")
+    assert "Rejected 1: kept the current version of Pricing 2026." in rejected.output
+    assert "Nothing is waiting for review." in zs("review").output
+    again = zs("review", "approve", "1")
+    assert again.exit_code == 1 and "no pending review item" in again.output
+
+
+def test_status_names_the_decision_engine(home, monkeypatch):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    zs("init", "--no-rule")
+    out = json.loads(zs("status", "--json").output)
+    assert out["decision_engine"].startswith("none") and out["embedder"] == "hashing-256"
+
+
+def test_sync_and_reindex_read_decisions_md(home, monkeypatch):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    zs("init", "--no-rule")
+    assert "no sources are set up yet" in zs("sync").output
+    from zerostore.connectors.decisions import append_decision
+
+    append_decision(home / "decisions.md", "The Pro plan costs $29 per month.", "khoi")
+    synced = zs("sync")
+    assert synced.exit_code == 0, synced.output
+    assert "+ Approved decisions  (decisions, added)" in synced.output
+    rebuilt = zs("reindex", "--yes")
+    assert rebuilt.exit_code == 0, rebuilt.output
+    assert "Rebuilding with the hashing-256 embedder" in rebuilt.output
+    assert "1 change · Approved decisions" in rebuilt.output
+
+
+def test_reindex_waits_for_a_running_sync_and_keeps_rejections(home, monkeypatch):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    from zerostore.config import load_config
+    from zerostore.connectors.decisions import append_decision
+    from zerostore.store.state import StateDB
+
+    zs("init", "--no-rule")
+    append_decision(home / "decisions.md", "The Pro plan costs $29 per month.", "khoi")
+    zs("sync")
+    state = StateDB(load_config(home / "zerostore.yaml").servers.statedb_path())
+    assert state.acquire_lock("sync", "someone-else", 60)
+    busy = zs("reindex", "--yes")
+    assert busy.exit_code == 1 and "sync is running" in busy.output
+    assert json.loads(zs("status", "--json").output)["chunks"] > 0  # nothing was emptied
+    state.release_lock("sync", "someone-else")
+    state.reject_version("decisions:decisions.md", "some-rejected-version")
+    done = zs("reindex", "--yes")
+    assert done.exit_code == 0, done.output
+    assert state.documents()["decisions:decisions.md"]["rejected_fingerprint"] is None  # applied fresh

@@ -82,13 +82,48 @@ class SyncSettings(_Section):
         return schedule
 
 
+LLM_PROVIDERS = ("anthropic", "openai", "gemini", "openrouter", "ollama")
+
+DEFAULT_TOPICS = [
+    "pricing and plans",
+    "product and roadmap",
+    "customers and sales",
+    "engineering",
+    "people and hiring",
+    "finance",
+    "legal and security",
+    "marketing",
+    "operations",
+    "company strategy",
+]
+
+
 class AISettings(_Section):
-    decision_engine: Literal["jev", "llm"] = "llm"
+    decision_engine: Literal["jev", "llm"] = "jev"
     jev_api_key: str | None = None
+    jev_model: str = "jev-latest"
+    jev_base_url: str = "https://api.typesafe.ai"  # or a Jev-compatible endpoint such as OpenRouter
     llm_provider: str | None = None
-    llm_model: str = "mid-tier"
+    llm_model: str = "mid-tier"  # "mid-tier" picks the provider's balanced model; any model name works
     llm_api_key: str | None = None
+    llm_base_url: str | None = None  # only for a self-hosted or proxied endpoint
     embeddings: Literal["provider", "local"] = "provider"
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _known_provider(cls, provider: str | None) -> str | None:
+        if provider is not None and provider.lower() not in LLM_PROVIDERS:
+            raise ValueError(f"llm_provider must be one of {', '.join(LLM_PROVIDERS)}, got {provider!r}")
+        return provider.lower() if provider else None
+
+    @property
+    def has_jev(self) -> bool:
+        return bool(self.jev_api_key)
+
+    @property
+    def has_llm(self) -> bool:
+        # Ollama runs locally and needs no key.
+        return self.llm_provider == "ollama" or bool(self.llm_provider and self.llm_api_key)
 
 
 class ReviewSettings(_Section):
@@ -101,6 +136,17 @@ class RetrievalSettings(_Section):
     rerank_rule: str = "Prefer the current decision over old discussion about it."
     narrow_with: Literal["auto", "jev", "llm", "off"] = "auto"
     rerank_with: Literal["auto", "jev", "llm", "local", "off"] = "auto"
+    topics: list[str] = Field(default_factory=lambda: list(DEFAULT_TOPICS))
+
+    @field_validator("topics")
+    @classmethod
+    def _some_topics(cls, topics: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(t.strip() for t in topics if t.strip()))
+        if not cleaned:
+            raise ValueError("retrieval.topics needs at least one topic")
+        if len(cleaned) > 100:
+            raise ValueError("retrieval.topics allows at most 100 topics")
+        return cleaned
 
 
 class ConfidentialRule(_Section):
@@ -147,8 +193,22 @@ class Config(_Section):
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     confidential: list[ConfidentialRule] = Field(default_factory=list)
     agent_proposals: bool = True
+    # Approved agent proposals are written here and read back as a source.
+    decisions_file: str | None = None  # default: ~/.zerostore/decisions.md
     web_ui: bool = True
     servers: ServerSettings = Field(default_factory=ServerSettings)
+
+    @model_validator(mode="after")
+    def _engines_have_keys(self) -> Config:
+        r, ai = self.retrieval, self.ai
+        if "jev" in (r.narrow_with, r.rerank_with) and not ai.has_jev:
+            raise ValueError("retrieval uses jev, but ai.jev_api_key is not set")
+        if "llm" in (r.narrow_with, r.rerank_with) and not ai.has_llm:
+            raise ValueError("retrieval uses llm, but ai.llm_provider and ai.llm_api_key are not both set")
+        return self
+
+    def decisions_path(self) -> Path:
+        return Path(self.decisions_file).expanduser() if self.decisions_file else home_dir() / "decisions.md"
 
 
 def expand_env(value: Any) -> Any:

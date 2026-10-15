@@ -55,10 +55,13 @@ TOKEN_CREATE = (
 TOKEN_LIST = "Owner only. List active access tokens with their names, levels and last use."
 TOKEN_REVOKE = "Owner only. Revoke an access token by its id; agents using it lose access immediately."
 REVIEW_LIST = (
-    "Owner only. List items waiting for a person's decision: "
-    "low-confidence changes and facts agents proposed."
+    "Owner only. List items waiting for a person's decision: low-confidence changes, "
+    "deleted files the librarian wasn't sure about, and facts agents proposed."
 )
-REVIEW_DECIDE = "Owner only. Approve or reject a review item by its id."
+REVIEW_DECIDE = (
+    "Owner only. Approve or reject a review item by its id. For an agent proposal, `fact` may "
+    "replace the proposed wording before it is saved."
+)
 SYNC_NOW = (
     "Owner only. Check every connected source for changes now instead of waiting for the schedule, "
     "and report what changed."

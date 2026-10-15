@@ -16,16 +16,23 @@ import os
 import re
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
+import anyio
+import mcp_types as types
+from mcp.server.elicitation import ElicitationResult
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.resolve import Elicit, Resolve
 from mcp_types import ToolAnnotations
+from pydantic import BaseModel, Field, create_model
 
 from zerostore import __version__
 from zerostore.access.tokens import AccessLevel, TokenError, TokenInfo
 from zerostore.app import ZeroStore
+from zerostore.decisions.select import Engines
 from zerostore.mcp import descriptions as d
+from zerostore.store.embeddings import EmbeddingError
 
 # Returns the raw token for the current request, or None.
 TokenSource = Callable[[Context], "str | None"]
@@ -84,7 +91,7 @@ def parse_since(since: str, now: datetime | None = None) -> str:
 
 
 def _fact_view(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    view = {
         "id": row["id"],
         "text": row["text"],
         "document": row["title"],
@@ -92,6 +99,27 @@ def _fact_view(row: dict[str, Any]) -> dict[str, Any]:
         "source_url": row["source_url"],
         "updated_at": row["updated_at"],
     }
+    if "score" in row:
+        view["score"] = round(float(row["score"]), 3)
+    if row.get("superseded_by"):
+        view["status"] = "outdated: a newer document replaced this fact; search again for the current one"
+    return view
+
+
+class NotAsked(BaseModel):
+    """The person wasn't asked about a proposal (see `ask_the_person`)."""
+
+    reason: str
+
+
+def _supports_elicitation(ctx: Context) -> bool:
+    try:
+        session = ctx.request_context.session
+        return session.check_client_capability(
+            types.ClientCapabilities(elicitation=types.ElicitationCapability())
+        )
+    except Exception:  # no session details (e.g. some test harnesses): assume it can't ask
+        return False
 
 
 def tools_for(level: AccessLevel) -> set[str]:
@@ -108,6 +136,7 @@ def build_server(
     token_source: TokenSource,
     *,
     only_level: AccessLevel | None = None,
+    engines: Engines | None = None,
 ) -> MCPServer:
     """Build the MCP server.
 
@@ -121,6 +150,11 @@ def build_server(
         version=__version__,
     )
     allowed = tools_for(only_level) if only_level else None
+
+    from zerostore.librarian.retrieval import Retriever
+    from zerostore.librarian.review import ReviewError, decide, describe
+
+    retriever = Retriever(zs, engines)
 
     def register(name: str, description: str, read_only: bool):
         def decorator(fn):
@@ -149,14 +183,17 @@ def build_server(
     @register("search", d.SEARCH, read_only=True)
     def search(query: str, ctx: Context) -> dict[str, Any]:
         caller = authorize(ctx, "search", query[:200])
-        rows = zs.facts.search(
-            query,
-            include_confidential=caller.level.sees_confidential,
-            limit=zs.config.retrieval.max_facts,
-        )
-        if not rows:
-            return {"answer": "not sure", "facts": []}
-        return {"facts": [_fact_view(r) for r in rows]}
+        try:
+            answer = retriever.answer(query, include_confidential=caller.level.sees_confidential)
+        except EmbeddingError as exc:
+            raise ToolError(f"search is unavailable right now: {exc}") from None
+        if answer.not_sure:
+            return {
+                "answer": "not sure",
+                "facts": [],
+                "note": "Nothing in ZeroStore answers this reliably. Ask the user instead of guessing.",
+            }
+        return {"facts": [_fact_view(r) for r in answer.facts]}
 
     @register("get_fact", d.GET_FACT, read_only=True)
     def get_fact(id: str, ctx: Context) -> dict[str, Any]:
@@ -188,21 +225,70 @@ def build_server(
 
     # Agent tool -----------------------------------------------------------
 
-    @register("propose_fact", d.PROPOSE_FACT, read_only=False)
-    def propose_fact(fact: str, quote: str, ctx: Context) -> dict[str, Any]:
-        caller = authorize(ctx, "propose_fact", fact[:200])
+    def ask_the_person(fact: str, quote: str, ctx: Context) -> Elicit[BaseModel] | NotAsked:
+        """Ask the person in the agent app (not the model) whether to save the fact.
+
+        Runs before the tool body, so it checks the token itself: a bad or
+        auto-approving token, or an app that can't show the question, is not asked.
+        """
+        try:
+            caller = zs.tokens.verify(token_source(ctx))
+        except TokenError:
+            return NotAsked(reason="no valid token")
+        if "propose_fact" not in tools_for(caller.level):
+            return NotAsked(reason="this level can't propose")
+        if caller.auto_approve or not zs.config.agent_proposals or not fact.strip():
+            return NotAsked(reason="not needed")
+        if not _supports_elicitation(ctx):
+            return NotAsked(reason="the app can't show the question")
+        form = create_model(
+            "SaveFact",
+            fact=(str, Field(default=fact.strip(), description="The fact to save. Edit it if needed.")),
+        )
+        prompt = f"Save this to company facts?\n\n{fact.strip()}"
+        if quote.strip():
+            prompt += f'\n\nFrom the conversation: "{quote.strip()}"'
+        return Elicit(prompt, form)
+
+    async def propose_fact(fact: str, quote: str, answer: Any, ctx: Context) -> dict[str, Any]:
+        caller = await anyio.to_thread.run_sync(lambda: authorize(ctx, "propose_fact", fact[:200]))
         if not zs.config.agent_proposals:
             raise ToolError("agent proposals are turned off in this ZeroStore")
         if not fact.strip():
             raise ToolError("the proposed fact is empty")
-        item_id = zs.state.add_review_item(
-            "agent_proposal", {"fact": fact.strip(), "quote": quote.strip()}, created_by=caller.id
-        )
+        # Proposals through a confidential token stay confidential once approved.
+        proposal = {
+            "fact": fact.strip(),
+            "quote": quote.strip(),
+            "confidential": caller.level.sees_confidential,
+        }
+        item_id = zs.state.add_review_item("agent_proposal", proposal, created_by=caller.name)
+
+        async def settle(approve: bool, by: str, text: str | None = None) -> str:
+            outcome = await anyio.to_thread.run_sync(lambda: decide(zs, item_id, approve, by, fact=text))
+            return outcome.message
+
+        if caller.auto_approve:
+            message = await settle(True, f"auto-approve on token {caller.name}")
+            return {"status": "saved", "review_id": item_id, "note": message}
+        asked = not (answer.action == "accept" and isinstance(answer.data, NotAsked))
+        if asked and answer.action == "accept":
+            message = await settle(
+                True, f"the person using {caller.name}", getattr(answer.data, "fact", None)
+            )
+            return {"status": "saved", "review_id": item_id, "note": message}
+        if answer.action == "decline":
+            await settle(False, f"the person using {caller.name}")
+            return {"status": "not saved", "review_id": item_id, "note": "The user chose not to save it."}
         return {
             "status": "waiting for approval",
             "review_id": item_id,
             "note": "A person will review this. It is not a fact until they approve it.",
         }
+
+    # The resolver is a closure, which string annotations can't name: set the real object.
+    propose_fact.__annotations__["answer"] = Annotated[ElicitationResult[BaseModel], Resolve(ask_the_person)]
+    register("propose_fact", d.PROPOSE_FACT, read_only=False)(propose_fact)
 
     # Setup tools (owner) --------------------------------------------------
 
@@ -245,22 +331,23 @@ def build_server(
     @register("review_list", d.REVIEW_LIST, read_only=True)
     def review_list(ctx: Context) -> dict[str, Any]:
         authorize(ctx, "review_list")
-        return {"items": zs.state.review_items("pending")}
+        return {"items": [describe(item) for item in zs.state.review_items("pending")]}
 
     @register("review_decide", d.REVIEW_DECIDE, read_only=False)
-    def review_decide(id: int, approve: bool, ctx: Context) -> dict[str, Any]:
+    def review_decide(id: int, approve: bool, ctx: Context, fact: str | None = None) -> dict[str, Any]:
         caller = authorize(ctx, "review_decide", f"{id} {'approve' if approve else 'reject'}")
-        if not zs.state.decide_review_item(id, approve, decided_by=caller.id):
-            raise ToolError(f"no pending review item with id {id}")
-        zs.state.audit("review_approved" if approve else "review_rejected", detail=str(id))
-        return {"id": id, "status": "approved" if approve else "rejected"}
+        try:
+            outcome = decide(zs, id, approve, decided_by=caller.name, fact=fact)
+        except ReviewError as exc:
+            raise ToolError(str(exc)) from None
+        return {"id": id, "status": outcome.status, "result": outcome.message}
 
     @register("sync_now", d.SYNC_NOW, read_only=False)
     def sync_now(ctx: Context) -> dict[str, Any]:
-        from zerostore.librarian.ingestion import Ingestor, SyncBusy
+        from zerostore.librarian.ingestion import Ingestor, SyncBusy, source_names
 
         authorize(ctx, "sync_now")
-        if not zs.config.sources.enabled():
+        if not source_names(zs.config):
             raise ToolError("no sources are set up yet")
         try:
             report = Ingestor(zs).sync()
@@ -269,7 +356,18 @@ def build_server(
         return {
             "summary": report.summary(),
             "changes": [
-                {"action": c.action, "document": c.title, "source": c.source} for c in report.changes
+                {
+                    k: v
+                    for k, v in {
+                        "action": c.action,
+                        "document": c.title,
+                        "source": c.source,
+                        "confidence": c.confidence,
+                        "note": c.note or None,
+                    }.items()
+                    if v is not None
+                }
+                for c in report.changes
             ],
             "problems": [
                 {"source": r.source, "error": r.error, "warning": r.warning, "failed": r.failed}

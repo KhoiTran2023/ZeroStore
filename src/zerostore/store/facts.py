@@ -4,6 +4,10 @@ Each row is one chunk of a source document, stored word for word with its
 source link, last-updated date, topic tags and a `confidential` flag. The store
 holds only the current version of each document; history lives in the audit
 table. It runs in-process, on local disk or on S3 (`s3://bucket/path`).
+
+When a newer document updates or contradicts a fact from another document,
+the older chunk is marked `superseded_by` the newer document and drops out of
+search. If that newer document is later retired, the older chunk comes back.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ class Chunk:
     ordinal: int = 0
     topics: list[str] = field(default_factory=list)
     confidential: bool = False
+    superseded_by: str = ""
 
     @property
     def id(self) -> str:
@@ -66,16 +71,35 @@ class FactStore:
                 ("updated_at", pa.string()),
                 ("topics", pa.list_(pa.string())),
                 ("confidential", pa.bool_()),
+                ("superseded_by", pa.string()),
                 ("vector", pa.list_(pa.float32(), self.embedder.dim)),
             ],
             metadata={b"zerostore.embedder": self.embedder.name.encode()},
         )
+
+    @classmethod
+    def empty(cls, uri: str, embedder: Embedder) -> FactStore:
+        """Drop every chunk and start an empty store with `embedder` (for reindex)."""
+        db = lancedb.connect(uri)
+        if TABLE in set(db.list_tables().tables):
+            db.drop_table(TABLE)
+        return cls(uri, embedder)
+
+    @staticmethod
+    def built_with(uri: str) -> str | None:
+        """The embedder an existing store was built with, or None if there is no store yet."""
+        db = lancedb.connect(uri)
+        if TABLE not in set(db.list_tables().tables):
+            return None
+        return (db.open_table(TABLE).schema.metadata or {}).get(b"zerostore.embedder", b"unknown").decode()
 
     def _open_or_create(self):
         existing = set(self._db.list_tables().tables)
         if TABLE in existing:
             table = self._db.open_table(TABLE)
             built_with = (table.schema.metadata or {}).get(b"zerostore.embedder", b"unknown").decode()
+            if "superseded_by" not in table.schema.names:  # stores made before superseding existed
+                table.add_columns({"superseded_by": "CAST('' AS STRING)"})
             if built_with != self.embedder.name:
                 raise RuntimeError(
                     f"the fact store at {self.uri} was built with the {built_with} embedder, but "
@@ -116,6 +140,20 @@ class FactStore:
     def delete_document(self, doc_id: str) -> None:
         self._table.delete(f"doc_id = {_quote(doc_id)}")
 
+    def supersede(self, chunk_ids: list[str], by_doc: str) -> None:
+        """Hide these chunks from search: `by_doc` holds the newer answer."""
+        if chunk_ids:
+            ids = ", ".join(_quote(i) for i in chunk_ids)
+            self._table.update(where=f"id IN ({ids})", values={"superseded_by": by_doc})
+
+    def restore_superseded(self, by_doc: str) -> int:
+        """`by_doc` is gone or changed: bring back the chunks it had hidden."""
+        where = f"superseded_by = {_quote(by_doc)}"
+        count = self._table.count_rows(where)
+        if count:
+            self._table.update(where=where, values={"superseded_by": ""})
+        return count
+
     def optimize(self) -> None:
         """Fold new rows into the indexes and compact files. Run after a sync.
 
@@ -136,6 +174,10 @@ class FactStore:
         rows = self._table.search().where(where).limit(1).to_list()
         return _public(rows[0]) if rows else None
 
+    def chunks_of(self, doc_id: str) -> list[dict[str, Any]]:
+        rows = self._table.search().where(f"doc_id = {_quote(doc_id)}").limit(10_000).to_list()
+        return sorted((_public(r) for r in rows), key=lambda r: r["ordinal"])
+
     def search(
         self,
         query: str,
@@ -143,11 +185,15 @@ class FactStore:
         include_confidential: bool,
         topics: list[str] | None = None,
         limit: int = 20,
+        exclude_doc: str | None = None,
+        include_superseded: bool = False,
     ) -> list[dict[str, Any]]:
         """Hybrid vector + keyword search, pre-filtered by access level and topics.
 
-        Results carry `_relevance_score` from LanceDB's reciprocal-rank fusion;
-        the librarian's reranker turns candidates into a 0-1 answer score.
+        A topic filter keeps chunks that have no tags (stored before any AI was
+        set up), so narrowing never hides them. Results carry `search_score`
+        from LanceDB's reciprocal-rank fusion; the librarian's reranker turns
+        candidates into a 0-1 answer score.
         """
         query = query.strip()
         if not query or self.count() == 0:
@@ -155,8 +201,13 @@ class FactStore:
         filters = []
         if not include_confidential:
             filters.append("confidential = false")
+        if not include_superseded:
+            filters.append("superseded_by = ''")
         if topics:
-            filters.append("array_has_any(topics, [" + ", ".join(_quote(t) for t in topics) + "])")
+            tags = ", ".join(_quote(t) for t in topics)
+            filters.append(f"(array_has_any(topics, [{tags}]) OR array_length(topics) = 0)")
+        if exclude_doc:
+            filters.append(f"doc_id != {_quote(exclude_doc)}")
         vector = self.embedder.embed([query])[0]
         builder = self._table.search(query_type="hybrid").vector(vector).text(query)
         if filters:
@@ -166,8 +217,9 @@ class FactStore:
     def sources(self, *, include_confidential: bool) -> list[dict[str, Any]]:
         """One entry per document: id, title, source, link, last updated, chunk count."""
         builder = self._table.search().select(["doc_id", "title", "source", "source_url", "updated_at"])
-        if not include_confidential:
-            builder = builder.where("confidential = false")
+        builder = builder.where(
+            "superseded_by = ''" + ("" if include_confidential else " AND confidential = false")
+        )
         docs: dict[str, dict[str, Any]] = {}
         for row in builder.limit(max(self.count(), 1)).to_list():
             doc = docs.setdefault(

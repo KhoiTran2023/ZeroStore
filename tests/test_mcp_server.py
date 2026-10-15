@@ -85,10 +85,10 @@ def test_search_answers_carry_sources(seeded, tokens):
 def test_not_sure_when_store_is_empty(zs):
     raw, _ = zs.tokens.create("a", "default")
     server = build_server(zs, Caller(raw))
-    assert ok(run(lambda: call(server, "search", {"query": "pricing"}))) == {
-        "answer": "not sure",
-        "facts": [],
-    }
+    result = ok(run(lambda: call(server, "search", {"query": "pricing"})))
+    assert result["answer"] == "not sure"
+    assert result["facts"] == []
+    assert "Ask the user" in result["note"]
 
 
 def test_get_fact_hides_confidential_from_default(seeded, tokens):

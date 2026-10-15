@@ -1,7 +1,7 @@
 """The `zerostore` command.
 
-Commands so far: init, serve, sync, token, status and connect. Demo, report,
-service and reindex arrive with later stages.
+Commands so far: init, serve, sync, review, reindex, token, status and
+connect. Demo, report and service arrive with later stages.
 
 Admin commands (init, token, status) work directly on this machine's state
 file: whoever can read ~/.zerostore already holds the owner token, and the
@@ -32,6 +32,12 @@ app = typer.Typer(
 )
 token_app = typer.Typer(help="Create, list and revoke access tokens.", no_args_is_help=True)
 app.add_typer(token_app, name="token")
+review_app = typer.Typer(
+    help="See and decide what's waiting for a person: low-confidence changes, unclear deletions "
+    "and facts agents proposed.",
+    invoke_without_command=True,
+)
+app.add_typer(review_app, name="review")
 
 OWNER_TOKEN_FILE = "owner-token"
 
@@ -48,9 +54,9 @@ sync:
   schedule: "0 6 * * *"   # daily at 06:00
 
 ai:
-  decision_engine: llm      # jev once you add a Jev key
+  decision_engine: jev      # used when a Jev key is set; otherwise your LLM
   # jev_api_key: ${{JEV_API_KEY}}
-  # llm_provider: anthropic
+  # llm_provider: anthropic   # anthropic, openai, gemini, openrouter or ollama
   # llm_api_key: ${{LLM_API_KEY}}
 
 servers:
@@ -184,7 +190,7 @@ def serve(
 ) -> None:
     """Run the MCP server (stdio for one agent, or HTTP for many), plus timed syncs."""
     zs = _open(config, quiet=False)
-    if schedule and zs.config.sources.enabled():
+    if schedule and _has_sources(zs.config):
         from zerostore.librarian.ingestion import Ingestor
         from zerostore.scheduler.runner import SyncScheduler
 
@@ -244,7 +250,7 @@ def sync(
     from zerostore.librarian.ingestion import Ingestor, SyncBusy
 
     zs = _open(config, quiet=False)
-    if not zs.config.sources.enabled():
+    if not _has_sources(zs.config):
         _fail(f"no sources are set up yet; add them under `sources:` in {CONFIG_FILENAME}")
     try:
         report = Ingestor(zs).sync(only=source or None)
@@ -252,9 +258,7 @@ def sync(
         _fail(f"{exc}; try again when it finishes")
     except ValueError as exc:
         _fail(str(exc))
-    for change in report.changes:
-        mark = {"added": "+", "updated": "~", "retired": "-"}[change.action]
-        typer.echo(f"  {mark} {change.title}  ({change.source}, {change.action})")
+    _print_changes(report)
     for result in report.sources:
         if result.error:
             typer.secho(f"  ! {result.source}: {result.error}", fg=typer.colors.RED, err=True)
@@ -265,6 +269,169 @@ def sync(
     typer.echo(report.summary())
     if not report.ok:
         raise typer.Exit(1)
+
+
+_MARKS = {
+    "added": ("+", "added"),
+    "updated": ("~", "updated"),
+    "retired": ("-", "retired"),
+    "moved": (">", "moved"),
+    "kept": ("=", "kept"),
+    "review": ("?", "waiting for review"),
+    "review_delete": ("?", "deleted in the source; waiting for review"),
+}
+
+
+def _print_changes(report) -> None:
+    for change in report.changes:
+        mark, label = _MARKS[change.action]
+        extra = [change.source, label]
+        if change.confidence is not None:
+            extra.append(f"confidence {change.confidence:.2f}")
+        if change.note:
+            extra.append(change.note)
+        typer.echo(f"  {mark} {change.title}  ({', '.join(extra)})")
+
+
+def _has_sources(config: Config) -> bool:
+    from zerostore.librarian.ingestion import source_names
+
+    return bool(source_names(config))
+
+
+@review_app.callback()
+def review_list(
+    ctx: typer.Context,
+    config: Path = ConfigOption,
+) -> None:
+    """List what's waiting for a decision (approve or reject with the subcommands)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from zerostore.librarian.review import describe
+
+    zs = _open(config)
+    items = [describe(item) for item in zs.state.review_items("pending")]
+    if not items:
+        typer.echo("Nothing is waiting for review.")
+        return
+    for item in items:
+        conf = f" · confidence {item['confidence']:.2f}" if item.get("confidence") is not None else ""
+        if item["kind"] == "agent_proposal":
+            typer.echo(f"[{item['id']}] Proposed fact: {item['fact']}")
+            if item.get("quote"):
+                typer.echo(f"      From: {item['quote']}")
+        elif item["kind"] == "delete":
+            hint = f" (looks moved to {item['moved_to']})" if item.get("moved_to") else ""
+            typer.echo(f"[{item['id']}] Deleted in {item['source']}: {item['document']}{hint}{conf}")
+            typer.echo("      Approve to stop serving it, reject to keep its facts.")
+        else:
+            typer.echo(
+                f"[{item['id']}] {item['change'].capitalize()}: {item['document']} ({item['source']}){conf}"
+            )
+            if item.get("note"):
+                typer.echo(f"      {item['note']}")
+            typer.echo(f"      {item['url']}")
+    typer.echo("\nDecide with `zerostore review approve <id>` or `zerostore review reject <id>`.")
+
+
+def _decide(item_id: int, approve: bool, config: Path | None, fact: str | None = None) -> None:
+    from zerostore.librarian.review import ReviewError, decide
+
+    zs = _open(config)
+    from zerostore.store.embeddings import EmbeddingError
+
+    try:
+        outcome = decide(zs, item_id, approve, "the owner (command line)", fact=fact)
+    except (ReviewError, EmbeddingError) as exc:
+        _fail(str(exc))
+    typer.echo(f"{outcome.status.capitalize()} {item_id}: {outcome.message}.")
+
+
+@review_app.command("approve")
+def review_approve(
+    item_id: int = typer.Argument(..., help="The item's id from `zerostore review`."),
+    fact: str = typer.Option(None, help="For a proposed fact: save this wording instead."),
+    config: Path = ConfigOption,
+) -> None:
+    """Approve an item: apply the change, retire the deleted file, or save the proposed fact."""
+    _decide(item_id, True, config, fact)
+
+
+@review_app.command("reject")
+def review_reject(
+    item_id: int = typer.Argument(..., help="The item's id from `zerostore review`."),
+    config: Path = ConfigOption,
+) -> None:
+    """Reject an item: keep the current version, keep the deleted file's facts, or drop the proposal."""
+    _decide(item_id, False, config)
+
+
+@app.command()
+def reindex(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask first."),
+    config: Path = ConfigOption,
+) -> None:
+    """Rebuild the fact store from your sources (for example after changing embeddings).
+
+    Stop `zerostore serve` first: it keeps the old store open.
+    """
+    from zerostore.app import ZeroStore, embedder_from_name, planned_embedder
+    from zerostore.librarian.ingestion import Ingestor, SyncBusy
+
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        _fail(str(exc))
+    if not _has_sources(cfg):
+        _fail(f"no sources are set up yet; add them under `sources:` in {CONFIG_FILENAME}")
+    from zerostore.access.tokens import TokenStore
+    from zerostore.librarian.ingestion import SYNC_LOCK, SYNC_LOCK_TTL
+    from zerostore.store.facts import FactStore
+    from zerostore.store.state import StateDB
+
+    state = StateDB(cfg.servers.statedb_path())
+    unrecoverable = [
+        d["title"]
+        for d in state.documents().values()
+        if d["chunks"] and (d["source_deleted_at"] or d["rejected_fingerprint"])
+    ]
+    warning = (
+        "This empties the fact store and reads every source again. Every document is judged again, "
+        "so anything below the confidence threshold waits for review instead of being served."
+    )
+    if unrecoverable:
+        warning += (
+            f" {len(unrecoverable)} document(s) can't be rebuilt because their source no longer has the "
+            f"version being served (deleted from the source, or you rejected a newer one): "
+            f"{', '.join(unrecoverable[:5])}{', ...' if len(unrecoverable) > 5 else ''}."
+        )
+    typer.echo(warning)
+    if not yes and not typer.confirm("Continue", default=True):
+        raise typer.Exit()
+    try:
+        embedder = embedder_from_name(planned_embedder(cfg), cfg)
+    except RuntimeError as exc:
+        _fail(str(exc))
+
+    # Hold the sync lock before emptying anything, so a running sync can't be cut in half.
+    ingestor_holder = f"reindex:{os.getpid()}"
+    if not state.acquire_lock(SYNC_LOCK, ingestor_holder, SYNC_LOCK_TTL):
+        _fail("a sync is running right now; try again when it finishes")
+    try:
+        facts = FactStore.empty(cfg.servers.vectordb_uri(), embedder)
+        state.forget_versions()  # keeps rejected versions, so they aren't proposed again
+        zs = ZeroStore(config=cfg, state=state, tokens=TokenStore(state), facts=facts)
+        typer.echo(f"Rebuilding with the {embedder.name} embedder...")
+        ingestor = Ingestor(zs)
+        ingestor.holder = ingestor_holder  # the lock is already ours
+        try:
+            report = ingestor.sync()
+        except SyncBusy as exc:  # pragma: no cover - we hold the lock
+            _fail(f"{exc}; try again when it finishes")
+    finally:
+        state.release_lock(SYNC_LOCK, ingestor_holder)
+    _print_changes(report)
+    typer.echo(report.summary())
 
 
 @token_app.command("create")
@@ -326,6 +493,8 @@ def status(
         "chunks": zs.facts.count(),
         "active_tokens": len(zs.tokens.list()),
         "pending_reviews": len(zs.state.review_items("pending")),
+        "decision_engine": _engine_label(cfg),
+        "embedder": zs.facts.embedder.name,
         "sync_schedule": cfg.sync.schedule,
         "last_sync": _last_sync(zs),
         "fact_store": cfg.servers.vectordb_uri(),
@@ -339,10 +508,23 @@ def status(
     typer.echo(f"  Documents:        {info['documents']} ({info['chunks']} chunks)")
     typer.echo(f"  Active tokens:    {info['active_tokens']}")
     typer.echo(f"  Waiting review:   {info['pending_reviews']}")
+    typer.echo(f"  Decisions:        {info['decision_engine']}")
+    typer.echo(f"  Embeddings:       {info['embedder']}")
     typer.echo(f"  Sync schedule:    {info['sync_schedule']}")
     last = info["last_sync"]
     typer.echo(f"  Last sync:        {last['finished_at'] + ' · ' + last['summary'] if last else 'never'}")
     typer.echo(f"  Fact store:       {info['fact_store']}")
+
+
+def _engine_label(cfg: Config) -> str:
+    ai = cfg.ai
+    if ai.decision_engine == "jev" and ai.has_jev:
+        return "Jev"
+    if ai.has_llm:
+        return f"your LLM ({ai.llm_provider})"
+    if ai.has_jev:
+        return "Jev"
+    return "none (every change is applied directly; add an AI key to turn on judgment)"
 
 
 def _last_sync(zs) -> dict | None:

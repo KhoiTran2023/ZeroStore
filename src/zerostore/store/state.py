@@ -16,7 +16,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Columns added after a table first shipped: (table, column, declaration).
+# CREATE TABLE IF NOT EXISTS leaves older files alone, so these are added on open.
+_ADDED_COLUMNS = [
+    ("review_queue", "doc_id", "TEXT"),
+    ("documents", "rejected_fingerprint", "TEXT"),
+    ("documents", "source_deleted_at", "TEXT"),
+]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -61,7 +69,8 @@ CREATE TABLE IF NOT EXISTS review_queue (
     created_at TEXT NOT NULL,
     created_by TEXT,
     decided_at TEXT,
-    decided_by TEXT
+    decided_by TEXT,
+    doc_id TEXT
 );
 CREATE TABLE IF NOT EXISTS sync_cursors (
     source TEXT PRIMARY KEY,
@@ -79,7 +88,9 @@ CREATE TABLE IF NOT EXISTS documents (
     location TEXT,
     confidential INTEGER NOT NULL DEFAULT 0,
     chunks INTEGER NOT NULL DEFAULT 0,
-    synced_at TEXT NOT NULL
+    synced_at TEXT NOT NULL,
+    rejected_fingerprint TEXT,
+    source_deleted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS locks (
     name TEXT PRIMARY KEY,
@@ -90,6 +101,8 @@ CREATE INDEX IF NOT EXISTS documents_source ON documents (source);
 CREATE INDEX IF NOT EXISTS audit_at ON audit (at);
 CREATE INDEX IF NOT EXISTS access_log_at ON access_log (at);
 """
+
+_INDEXES_ON_ADDED = "CREATE INDEX IF NOT EXISTS review_doc ON review_queue (doc_id, status);"
 
 
 def utcnow() -> str:
@@ -113,6 +126,11 @@ class StateDB:
             self._conn.execute("PRAGMA journal_mode = WAL")
         with self.tx() as cur:
             cur.executescript(_SCHEMA)
+            for table, column, decl in _ADDED_COLUMNS:
+                have = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+                if column not in have:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            cur.executescript(_INDEXES_ON_ADDED)
             cur.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
                 " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -204,7 +222,7 @@ class StateDB:
                 f" VALUES ({', '.join('?' for _ in cols)}, ?)"
                 " ON CONFLICT(doc_id) DO UPDATE SET "
                 + ", ".join(f"{c} = excluded.{c}" for c in cols[1:])
-                + ", synced_at = excluded.synced_at",
+                + ", synced_at = excluded.synced_at, rejected_fingerprint = NULL, source_deleted_at = NULL",
                 (*(record[c] for c in cols), utcnow()),
             )
 
@@ -219,6 +237,31 @@ class StateDB:
     def delete_document(self, doc_id: str) -> None:
         with self.tx() as cur:
             cur.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+
+    def reject_version(self, doc_id: str, fingerprint: str) -> None:
+        """A person turned this version down: don't propose it again until the source changes."""
+        with self.tx() as cur:
+            cur.execute(
+                "UPDATE documents SET rejected_fingerprint = ? WHERE doc_id = ?", (fingerprint, doc_id)
+            )
+
+    def mark_source_deleted(self, doc_id: str, deleted: bool) -> None:
+        """The source no longer has this document, but its facts are kept (or it came back)."""
+        with self.tx() as cur:
+            cur.execute(
+                "UPDATE documents SET source_deleted_at = ? WHERE doc_id = ?",
+                (utcnow() if deleted else None, doc_id),
+            )
+
+    def forget_versions(self) -> None:
+        """Mark every document as holding nothing, so the next sync fetches and stores each one again.
+
+        For reindex. Rejected versions are remembered, so they aren't proposed again.
+        """
+        with self.tx() as cur:
+            cur.execute(
+                "UPDATE documents SET version = '', fingerprint = '', chunks = 0, source_deleted_at = NULL"
+            )
 
     # Access log -----------------------------------------------------------
 
@@ -280,14 +323,29 @@ class StateDB:
         payload: dict[str, Any],
         confidence: float | None = None,
         created_by: str | None = None,
+        doc_id: str | None = None,
     ) -> int:
         with self.tx() as cur:
             cur.execute(
-                "INSERT INTO review_queue (kind, payload, confidence, created_at, created_by)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (kind, json.dumps(payload), confidence, utcnow(), created_by),
+                "INSERT INTO review_queue (kind, payload, confidence, created_at, created_by, doc_id)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (kind, json.dumps(payload), confidence, utcnow(), created_by, doc_id),
             )
             return int(cur.lastrowid)
+
+    def pending_doc_ids(self, kind: str) -> set[str]:
+        rows = self.query(
+            "SELECT DISTINCT doc_id FROM review_queue WHERE kind = ? AND status = 'pending'"
+            " AND doc_id IS NOT NULL",
+            (kind,),
+        )
+        return {r["doc_id"] for r in rows}
+
+    def pending_for_document(self, doc_id: str) -> list[dict[str, Any]]:
+        rows = self.query(
+            "SELECT * FROM review_queue WHERE doc_id = ? AND status = 'pending' ORDER BY id", (doc_id,)
+        )
+        return [_review_row(r) for r in rows]
 
     def review_items(self, status: str = "pending", limit: int = 100) -> list[dict[str, Any]]:
         rows = self.query("SELECT * FROM review_queue WHERE status = ? ORDER BY id LIMIT ?", (status, limit))
@@ -306,6 +364,15 @@ class StateDB:
                 ("approved" if approve else "rejected", utcnow(), decided_by, item_id),
             )
             return cur.rowcount == 1
+
+    def reopen_review_item(self, item_id: int) -> None:
+        """Undo a decision whose follow-up failed, so a person can try again."""
+        with self.tx() as cur:
+            cur.execute(
+                "UPDATE review_queue SET status = 'pending', decided_at = NULL, decided_by = NULL"
+                " WHERE id = ?",
+                (item_id,),
+            )
 
     # Sync cursors ---------------------------------------------------------
 

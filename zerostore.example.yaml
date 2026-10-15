@@ -22,13 +22,17 @@ sources:
 sync:
   schedule: "0 6 * * *"
 
-# Your own AI account. Bring your own key; any provider works.
+# Your own AI account. Bring your own key. With no key at all, every change is
+# applied directly and search isn't reranked (except by the local model, if installed).
 ai:
-  decision_engine: jev          # jev, or llm (clef later)
+  decision_engine: jev          # jev, or llm (clef later); jev is used only when its key is set
   jev_api_key: ${JEV_API_KEY}   # optional; without it, your LLM is used
-  llm_provider: anthropic       # any provider, including local ollama
-  llm_model: mid-tier
+  jev_model: jev-latest
+  jev_base_url: https://api.typesafe.ai   # or another Jev-compatible endpoint
+  llm_provider: anthropic       # anthropic, openai, gemini, openrouter, or ollama (local, no key)
+  llm_model: mid-tier           # the provider's balanced model, or name any model
   llm_api_key: ${LLM_API_KEY}
+  # llm_base_url: http://gpu-box:11434/v1   # only for a self-hosted or proxied endpoint
   embeddings: provider          # provider, or local (falls back to local if the provider has none)
 
 # Changes at or above this confidence go live; lower ones wait in the review queue.
@@ -42,6 +46,17 @@ retrieval:
   rerank_rule: "Prefer the current decision over old discussion about it."
   narrow_with: auto             # auto, jev, llm, or off
   rerank_with: auto             # auto, jev, llm, local, or off
+  topics:                       # what narrowing and topic tags choose from
+    - pricing and plans
+    - product and roadmap
+    - customers and sales
+    - engineering
+    - people and hiring
+    - finance
+    - legal and security
+    - marketing
+    - operations
+    - company strategy
 
 # Optional: mark whole sources confidential. Only confidential and owner
 # tokens can see them. With no rules, everything is non-confidential.
@@ -50,6 +65,7 @@ confidential:
   - linear_label: "hr"
 
 agent_proposals: true           # agents may propose facts for you to approve
+decisions_file: ~/.zerostore/decisions.md   # approved proposals land here and are read back as a source
 web_ui: true
 
 # Where each part runs and keeps its data.
