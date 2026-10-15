@@ -32,3 +32,41 @@ jobs:
           ruff format --check src tests
       - name: Test
         run: python -m pytest
+
+  # A real install: install.sh, then the background service on systemd (Linux) and launchd (macOS).
+  install:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start a systemd user manager
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          for _ in $(seq 1 40); do [ -S "$runtime/bus" ] && break; sleep 0.5; done
+          XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment > /dev/null
+      - name: Run install.sh
+        run: sh install.sh
+        env:
+          ZEROSTORE_PACKAGE: ${{ github.workspace }}
+          ZEROSTORE_NO_OPEN: "1"
+      - name: Check, reinstall and remove the service
+        run: |
+          export PATH="$HOME/.local/bin:/opt/pipx_bin:$PATH"
+          curl -fsS -o login.html http://localhost:8765/login
+          grep -q "Sign in" login.html
+          zerostore service status
+          zerostore service install
+          curl -fsS http://localhost:8765/login > /dev/null
+          zerostore service uninstall
+          if curl -fsS http://localhost:8765/login > /dev/null 2>&1; then echo "still answering after uninstall"; exit 1; fi
+          if zerostore service status; then echo "status should fail once removed"; exit 1; fi
+      - name: Service logs
+        if: failure()
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then journalctl --user -u zerostore.service --no-pager; else cat ~/.zerostore/logs/serve.log; fi

@@ -313,7 +313,8 @@ def default_config_path() -> Path:
 
 
 def home_dir() -> Path:
-    return Path(os.environ.get("ZEROSTORE_HOME", str(DEFAULT_HOME))).expanduser()
+    # An empty ZEROSTORE_HOME counts as unset, never as "the current folder".
+    return Path(os.environ.get("ZEROSTORE_HOME") or str(DEFAULT_HOME)).expanduser()
 
 
 def resolve_config_path(path: Path | str | None = None) -> Path:
