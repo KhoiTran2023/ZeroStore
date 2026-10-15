@@ -8,6 +8,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -141,7 +142,21 @@ def test_reinstall_stops_the_old_service_before_checking_the_port(tmp_path):
     service.install(
         unit, plan(tmp_path), in_use=lambda h, p: order.append("port") or False, wait=lambda h, p: True
     )
-    assert order == ["stop", "port"]
+    assert order[0] == "stop" and set(order[1:]) == {"port"}
+
+
+def test_reinstall_waits_for_the_old_server_to_let_go_of_the_port(tmp_path):
+    unit = service.Systemd("user", run=FakeRun(systemd_answers()), home=tmp_path)
+    unit.write(plan(tmp_path))
+    busy = [True, True, False]
+    in_use = lambda h, p: busy.pop(0) if len(busy) > 1 else busy[0]  # noqa: E731
+    service.install(unit, plan(tmp_path), in_use=in_use, wait=lambda h, p: True)
+    assert busy == [False]
+
+    with pytest.raises(service.ServiceError, match="already listening"):
+        service.install(
+            unit, plan(tmp_path), in_use=lambda h, p: True, wait=lambda h, p: True, stop_timeout=0
+        )
 
 
 def test_install_reports_a_service_that_never_answers(tmp_path):
@@ -213,6 +228,22 @@ def test_launchd_agent(tmp_path):
         ["launchctl", "enable", "gui/501/zerostore.serve"],
     ]
     assert agent.logs == f"tail -f {log}"
+
+
+def test_launchd_stop_waits_for_the_server_to_exit(tmp_path):
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    printed = f"state = running\npid = {gone.pid}\n"
+    agent = service.Launchd(uid=501, run=FakeRun({("launchctl", "print"): (0, printed)}), home=tmp_path)
+    agent.stop()  # already exited: returns at once
+    assert agent.run.ran("launchctl", "bootout", "gui/501/zerostore.serve")
+
+    printed = f"state = running\npid = {os.getpid()}\n"
+    agent = service.Launchd(uid=501, run=FakeRun({("launchctl", "print"): (0, printed)}), home=tmp_path)
+    agent.stop_timeout = 0.3
+    started = time.monotonic()
+    agent.stop()  # still alive: gives up after stop_timeout
+    assert time.monotonic() - started >= 0.3
 
 
 def test_launchd_needs_a_login_session(tmp_path):

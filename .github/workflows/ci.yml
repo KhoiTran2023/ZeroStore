@@ -68,4 +68,5 @@ jobs:
           if zerostore service status; then echo "status should fail once removed"; exit 1; fi
       - name: Service logs
         if: failure()
-        run: journalctl --user -u zerostore.service --no-pager || cat ~/.zerostore/logs/serve.log
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then journalctl --user -u zerostore.service --no-pager; else cat ~/.zerostore/logs/serve.log; fi

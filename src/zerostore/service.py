@@ -223,6 +223,7 @@ class Launchd:
         self.domain = f"gui/{self.uid}"
         self.target = f"{self.domain}/{LAUNCHD_LABEL}"
         self.log_path: Path | None = None
+        self.stop_timeout = 15.0
 
     @property
     def logs(self) -> str:
@@ -274,7 +275,11 @@ class Launchd:
         self.run(["launchctl", "enable", self.target])
 
     def stop(self) -> None:
+        # bootout returns before the server has exited; wait, so its port is free when this returns.
+        pid = self.status().pid
         self.run(["launchctl", "bootout", self.target])
+        if pid:
+            _wait_until(lambda: not _alive(pid), timeout=self.stop_timeout)
 
     def remove(self) -> None:
         self.stop()
@@ -312,6 +317,16 @@ def detect(run: Run = run) -> Manager:
         f"`zerostore service` works on Linux (systemd) and macOS (launchd), not {sys.platform}. "
         "Run `zerostore serve --http` with your own process manager instead."
     )
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _systemd_quote(arg: str) -> str:
@@ -362,15 +377,22 @@ def port_in_use(host: str, port: int) -> bool:
         return False
 
 
+def _wait_until(
+    done: Callable[[], bool], timeout: float, sleep: Callable[[float], None] = time.sleep
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        if done():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        sleep(0.25)
+
+
 def wait_for_port(
     host: str, port: int, timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep
 ) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if port_in_use(host, port):
-            return True
-        sleep(0.25)
-    return False
+    return _wait_until(lambda: port_in_use(host, port), timeout, sleep)
 
 
 def install(
@@ -379,14 +401,16 @@ def install(
     *,
     in_use: Callable[[str, int], bool] | None = None,
     wait: Callable[[str, int], bool] | None = None,
+    stop_timeout: float = 15.0,
 ) -> list[str]:
     """Write the service, start it and wait until it answers. Returns notes to show."""
     in_use = in_use or port_in_use
     wait = wait or wait_for_port
     manager.check()
-    replaced = manager.path.exists()
-    if replaced:
+    if manager.path.exists():
         manager.stop()
+        # launchd's bootout returns before the old server has let go of its port.
+        _wait_until(lambda: not in_use(plan.host, plan.port), timeout=stop_timeout)
     if in_use(plan.host, plan.port):
         raise ServiceError(
             f"something is already listening on port {plan.port}. Stop it (a `zerostore serve --http` "
