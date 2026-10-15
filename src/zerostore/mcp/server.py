@@ -99,7 +99,7 @@ def tools_for(level: AccessLevel) -> set[str]:
     if level.can_propose:
         names.add("propose_fact")
     if level.is_owner:
-        names |= {"token_create", "token_list", "token_revoke", "review_list", "review_decide"}
+        names |= {"token_create", "token_list", "token_revoke", "review_list", "review_decide", "sync_now"}
     return names
 
 
@@ -254,5 +254,28 @@ def build_server(
             raise ToolError(f"no pending review item with id {id}")
         zs.state.audit("review_approved" if approve else "review_rejected", detail=str(id))
         return {"id": id, "status": "approved" if approve else "rejected"}
+
+    @register("sync_now", d.SYNC_NOW, read_only=False)
+    def sync_now(ctx: Context) -> dict[str, Any]:
+        from zerostore.librarian.ingestion import Ingestor, SyncBusy
+
+        authorize(ctx, "sync_now")
+        if not zs.config.sources.enabled():
+            raise ToolError("no sources are set up yet")
+        try:
+            report = Ingestor(zs).sync()
+        except SyncBusy:
+            raise ToolError("a sync is already running; try again when it finishes") from None
+        return {
+            "summary": report.summary(),
+            "changes": [
+                {"action": c.action, "document": c.title, "source": c.source} for c in report.changes
+            ],
+            "problems": [
+                {"source": r.source, "error": r.error, "warning": r.warning, "failed": r.failed}
+                for r in report.sources
+                if r.error or r.warning or r.failed
+            ],
+        }
 
     return server

@@ -1,7 +1,7 @@
 """The `zerostore` command.
 
-This first stage has: init, serve, token, status and connect. Sync, demo,
-report, service and reindex arrive with the sources and librarian stages.
+Commands so far: init, serve, sync, token, status and connect. Demo, report,
+service and reindex arrive with later stages.
 
 Admin commands (init, token, status) work directly on this machine's state
 file: whoever can read ~/.zerostore already holds the owner token, and the
@@ -179,10 +179,16 @@ def serve(
     behind_https_proxy: bool = typer.Option(
         False, help="Allow plain HTTP on a non-local address because a proxy in front terminates HTTPS."
     ),
+    schedule: bool = typer.Option(True, "--schedule/--no-schedule", help="Run timed syncs in this process."),
     config: Path = ConfigOption,
 ) -> None:
-    """Run the MCP server (stdio for one agent, or HTTP for many)."""
+    """Run the MCP server (stdio for one agent, or HTTP for many), plus timed syncs."""
     zs = _open(config, quiet=False)
+    if schedule and zs.config.sources.enabled():
+        from zerostore.librarian.ingestion import Ingestor
+        from zerostore.scheduler.runner import SyncScheduler
+
+        SyncScheduler(Ingestor(zs), zs.config.sync.schedule).start()
     if not http:
         _serve_stdio(zs)
         return
@@ -225,6 +231,40 @@ def _serve_stdio(zs) -> None:
             "(create one with `zerostore token create`)."
         )
     build_server(zs, env_token_source, only_level=caller.level).run("stdio")
+
+
+@app.command()
+def sync(
+    source: list[str] = typer.Option(
+        None, "--source", "-s", help="Only this source (google_drive, github, linear). Repeatable."
+    ),
+    config: Path = ConfigOption,
+) -> None:
+    """Check every source for changes now and update the fact store."""
+    from zerostore.librarian.ingestion import Ingestor, SyncBusy
+
+    zs = _open(config, quiet=False)
+    if not zs.config.sources.enabled():
+        _fail(f"no sources are set up yet; add them under `sources:` in {CONFIG_FILENAME}")
+    try:
+        report = Ingestor(zs).sync(only=source or None)
+    except SyncBusy as exc:
+        _fail(f"{exc}; try again when it finishes")
+    except ValueError as exc:
+        _fail(str(exc))
+    for change in report.changes:
+        mark = {"added": "+", "updated": "~", "retired": "-"}[change.action]
+        typer.echo(f"  {mark} {change.title}  ({change.source}, {change.action})")
+    for result in report.sources:
+        if result.error:
+            typer.secho(f"  ! {result.source}: {result.error}", fg=typer.colors.RED, err=True)
+        if result.warning:
+            typer.secho(f"  ! {result.source}: {result.warning}", fg=typer.colors.YELLOW, err=True)
+        for failure in result.failed:
+            typer.secho(f"  ! {result.source}: couldn't read {failure}", fg=typer.colors.YELLOW, err=True)
+    typer.echo(report.summary())
+    if not report.ok:
+        raise typer.Exit(1)
 
 
 @token_app.command("create")
@@ -287,6 +327,7 @@ def status(
         "active_tokens": len(zs.tokens.list()),
         "pending_reviews": len(zs.state.review_items("pending")),
         "sync_schedule": cfg.sync.schedule,
+        "last_sync": _last_sync(zs),
         "fact_store": cfg.servers.vectordb_uri(),
         "state_db": str(cfg.servers.statedb_path()),
     }
@@ -299,7 +340,19 @@ def status(
     typer.echo(f"  Active tokens:    {info['active_tokens']}")
     typer.echo(f"  Waiting review:   {info['pending_reviews']}")
     typer.echo(f"  Sync schedule:    {info['sync_schedule']}")
+    last = info["last_sync"]
+    typer.echo(f"  Last sync:        {last['finished_at'] + ' · ' + last['summary'] if last else 'never'}")
     typer.echo(f"  Fact store:       {info['fact_store']}")
+
+
+def _last_sync(zs) -> dict | None:
+    raw = zs.state.get_meta("last_sync")
+    if not raw:
+        return None
+    from zerostore.librarian.ingestion import SyncReport
+
+    report = SyncReport.from_json(raw)
+    return {"finished_at": report.finished_at, "summary": report.summary(), "ok": report.ok}
 
 
 @app.command()

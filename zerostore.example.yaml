@@ -6,9 +6,16 @@
 
 # Where company truth lives. ZeroStore only reads these; it never edits them.
 sources:
-  google_drive: { folders: ["Company/Decisions", "Company/Pricing"] }
-  github:       { repos: ["acme/app"] }
-  linear:       { teams: ["Product"] }
+  google_drive:
+    folders: ["Company/Decisions", "Company/Pricing"]   # paths, or folder ids written as "id:1AbC..."
+    credentials: ~/.zerostore/google-credentials.json   # from Sign in with Google, or a service account key
+  github:
+    repos: ["acme/app"]
+    token: ${GITHUB_TOKEN}                              # needed for private repos
+    include: ["*.md", "*.mdx", "*.markdown", "*.txt", "*.rst"]   # which files count as docs
+  linear:
+    teams: ["Product"]                                  # team names or keys
+    api_key: ${LINEAR_API_KEY}
 
 # When to check sources for changes (cron format). Default: daily at 06:00.
 # `zerostore sync` runs a sync right away.

@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -67,6 +68,25 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
     cursor TEXT,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    version TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    updated_at TEXT,
+    location TEXT,
+    confidential INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS locks (
+    name TEXT PRIMARY KEY,
+    holder TEXT NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS documents_source ON documents (source);
 CREATE INDEX IF NOT EXISTS audit_at ON audit (at);
 CREATE INDEX IF NOT EXISTS access_log_at ON access_log (at);
 """
@@ -94,7 +114,9 @@ class StateDB:
         with self.tx() as cur:
             cur.executescript(_SCHEMA)
             cur.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),)
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(SCHEMA_VERSION),),
             )
 
     @contextmanager
@@ -117,6 +139,86 @@ class StateDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    # Meta values ----------------------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        rows = self.query("SELECT value FROM meta WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self.tx() as cur:
+            cur.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    # Locks (several processes may share one state file) --------------------
+
+    def acquire_lock(self, name: str, holder: str, ttl_seconds: float) -> bool:
+        """Take the named lock unless someone else holds an unexpired one."""
+        now = time.time()
+        with self.tx() as cur:
+            cur.execute("DELETE FROM locks WHERE name = ? AND expires_at < ?", (name, now))
+            cur.execute(
+                "INSERT OR IGNORE INTO locks (name, holder, expires_at) VALUES (?, ?, ?)",
+                (name, holder, now + ttl_seconds),
+            )
+            if cur.rowcount == 1:
+                return True
+            cur.execute(
+                "UPDATE locks SET expires_at = ? WHERE name = ? AND holder = ?",
+                (now + ttl_seconds, name, holder),
+            )
+            return cur.rowcount == 1
+
+    def release_lock(self, name: str, holder: str) -> None:
+        with self.tx() as cur:
+            cur.execute("DELETE FROM locks WHERE name = ? AND holder = ?", (name, holder))
+
+    # Documents (what the fact store holds, per source) -----------------------
+
+    def documents(self, source: str | None = None) -> dict[str, dict[str, Any]]:
+        sql, params = "SELECT * FROM documents", ()
+        if source:
+            sql, params = sql + " WHERE source = ?", (source,)
+        return {r["doc_id"]: dict(r) for r in self.query(sql, params)}
+
+    def upsert_document(self, record: dict[str, Any]) -> None:
+        cols = (
+            "doc_id",
+            "source",
+            "title",
+            "url",
+            "version",
+            "fingerprint",
+            "updated_at",
+            "location",
+            "confidential",
+            "chunks",
+        )
+        with self.tx() as cur:
+            cur.execute(
+                f"INSERT INTO documents ({', '.join(cols)}, synced_at)"
+                f" VALUES ({', '.join('?' for _ in cols)}, ?)"
+                " ON CONFLICT(doc_id) DO UPDATE SET "
+                + ", ".join(f"{c} = excluded.{c}" for c in cols[1:])
+                + ", synced_at = excluded.synced_at",
+                (*(record[c] for c in cols), utcnow()),
+            )
+
+    def touch_document(self, doc_id: str, version: str) -> None:
+        """The item changed version but not content: remember the new version."""
+        with self.tx() as cur:
+            cur.execute(
+                "UPDATE documents SET version = ?, synced_at = ? WHERE doc_id = ?",
+                (version, utcnow(), doc_id),
+            )
+
+    def delete_document(self, doc_id: str) -> None:
+        with self.tx() as cur:
+            cur.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
 
     # Access log -----------------------------------------------------------
 
