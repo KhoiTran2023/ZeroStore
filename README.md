@@ -4,7 +4,18 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, and the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"). The demo and the web setup page come next.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), and `zerostore demo`. The web setup page comes next.
+
+## Try it in 60 seconds
+
+```bash
+pip install git+https://github.com/KhoiTran2023/ZeroStore
+zerostore demo
+```
+
+`zerostore demo` loads Pebble & Co., a made-up startup with Google Docs, a GitHub repo and Linear issues, and plays out the story: two agents say the Pro plan costs $20, the CEO edits the pricing doc to $29, `zerostore sync` reports `1 change · Pricing 2026 · demo judge confidence 0.97`, and both agents now answer $29. Then a "maybe we drop the free tier?" note lands at confidence 0.54 and waits for review instead of changing the answer. It needs no accounts, keys or network, and never touches your real setup.
+
+To try it with your own agents, run `zerostore demo start`. It prints a `claude mcp add` line (and the same for Cursor or Codex) with a token for Pebble & Co. Ask your agent what the Pro plan costs, run `zerostore demo change-price` and the sync command it shows, then ask again. The demo judges with a small set of scripted rules; with `JEV_API_KEY` set, Jev judges instead. `zerostore demo remove` deletes it.
 
 ## Try the core
 
@@ -81,6 +92,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore token create / list / revoke` | Manages access tokens |
 | `zerostore status` | Shows what ZeroStore holds and what waits for review |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
+| `zerostore demo` | Plays the Pebble & Co. story; `demo start`, `change-price`, `add-note` and `remove` step through it |
 
 See [`zerostore.example.yaml`](zerostore.example.yaml) for every setting.
 

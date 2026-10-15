@@ -26,6 +26,9 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Deleted files go through `on_delete` after every source is read, with candidates from documents added in the same sync plus the nearest facts: moved (retired, audited as `document_moved`), retire, keep (facts stay, `source_deleted_at` set, not asked again) or unsure/low confidence (a `delete` review item; facts stay live). An engine failure keeps everything as it was and reports it.
 - Retrieval: `route` narrows to topics only when its confidence is at least 0.60 (untagged chunks are always included), hybrid search fetches 4 candidates per fact returned, `score` reranks them with the steering rule and each document's date, and below `retrieval.answer_cutoff` the answer is "not sure". If a narrowed search scores below the cutoff, everything is searched before giving up.
 - Embeddings: your provider's service when it has one (OpenAI `text-embedding-3-small`, Ollama `nomic-embed-text`), else the local fastembed model, else the hashing embedder. A store keeps the embedder it was built with until `zerostore reindex`, so adding a key later never breaks it. Reindex takes the sync lock before emptying the store, keeps rejected versions, re-judges every document, and warns first about documents it can't rebuild (deleted from their source, or kept at a version the source no longer has).
+- Every `zerostore serve` process (one per stdio agent) opens LanceDB with a 1-second read-consistency interval, so a sync run by any other process reaches every connected agent within a second, without a restart. On S3 that costs one version check per process per second of reads.
+- `zerostore demo` is a separate install in `~/.zerostore/demo/` (port 8766, its own state, fact store and decisions file) for Pebble & Co., a made-up startup. Its config sets `demo: <folder>`, which makes every source (Google Drive, GitHub, Linear) read local files laid out like the real service (`company/<source>/<folder, repo or team>/...`, with a small `---` header for title, date and labels), so confidentiality rules, deletions and moves behave as they do for real. It judges with `ai.decision_engine: demo`, a scripted engine of word rules that is labelled "demo judge" everywhere (Jev instead when `JEV_API_KEY` is set), and uses `ai.embeddings: basic` (the hashing embedder), so it runs offline and plays out the same way every time. Its agents ask through the real MCP server with two default-level tokens. The demo only ever deletes a folder holding its `.zerostore-demo` marker, removes that marker last, and keeps the agents' tokens across `demo start` resets so connected agents keep working. `decision_engine: demo` is refused outside a demo config. Printed commands carry `--home` when the demo lives somewhere other than the default.
+- The demo company lives in `src/zerostore/demo/company/` rather than a top-level `demo/` folder (as the spec sketched) so it ships inside the package.
 - State schema v3 adds `review_queue.doc_id`, `documents.rejected_fingerprint` and `documents.source_deleted_at`; older files are upgraded on open. Older fact stores get the `superseded_by` column on open.
 
 ## Current state
@@ -33,7 +36,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Stage 1 (core, merged): settings, fact store, state DB, tokens and access levels, MCP server (stdio + HTTP), CLI `init`, `serve`, `token`, `status`, `connect` (rule line only). Search is LanceDB hybrid (vector + keyword) search; reranking, narrowing and the "not sure" cutoff arrive with the retrieval layer.
 - Stage 2 (sources and sync, merged): Google Drive, GitHub and Linear connectors; Markdown-aware chunking; ingestion that adds, updates and retires documents with audit rows; `zerostore sync`; timed syncs in `serve`; owner-only `sync_now` MCP tool; last sync shown in `zerostore status`.
 - Stage 3 (the librarian's judgment): decision engine with Jev, LLM and local backends; noise filtering and topic tags at ingestion; confidence, the review queue and superseding in the update layer; judged deletions; retrieval with narrowing, reranking and "not sure"; proposals with in-app approval and `decisions.md`; provider embeddings; `zerostore review` and `zerostore reindex`. The Jev and LLM backends are tested against fake APIs only, not live accounts.
-- Next stages: `zerostore demo`; web UI in the mockup E design; installer and service setup; a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
+- Stage 4 (`zerostore demo`): Pebble & Co. with simulated Google Drive, GitHub and Linear sources; the scripted demo judge; `zerostore demo` plays the story (two agents, the CEO's $20 to $29 change, the stale Sales FAQ hidden, a "maybe we drop the free tier?" note waiting at 0.54); `demo start`, `change-price`, `add-note` and `remove` step through it with real agents. Also fixed: long-running servers now see syncs made by other processes.
+- Next stages: web UI in the mockup E design; installer and service setup; a Sign in with Google flow that writes the credentials file; `zerostore report`; caching keep decisions for unchanged chunks so edits to long documents cost less.
 
 ## Working on it
 
@@ -56,7 +60,7 @@ ZeroStore/
 ├── src/zerostore/
 │   ├── __init__.py           Version
 │   ├── app.py                Opens config, state, tokens and fact store together; picks the embedder
-│   ├── cli.py                init, serve, sync, review, reindex, token, status, connect
+│   ├── cli.py                init, serve, sync, review, reindex, token, status, connect, demo
 │   ├── config.py             Reads and checks zerostore.yaml (env-var expansion, defaults, clear errors)
 │   ├── access/
 │   │   └── tokens.py         Access levels; token create, verify, list, revoke, auto-approve
@@ -65,16 +69,22 @@ ZeroStore/
 │   ├── connectors/
 │   │   ├── base.py           Connector interface: list items with versions, fetch one document
 │   │   ├── decisions.py      decisions.md: approved agent proposals, appended and read back as a source
+│   │   ├── demo.py           Simulated Drive, GitHub and Linear for the demo, read from local files
 │   │   ├── gdrive.py         Google Drive folders (Docs, Sheets, Slides, text and Markdown files)
 │   │   ├── google_auth.py    Google access tokens from an authorized-user file or service-account key
 │   │   ├── github.py         Written docs on each repo's default branch
 │   │   └── linear.py         Linear issues and documents for chosen teams (GraphQL)
 │   ├── decisions/
 │   │   ├── base.py           DecisionEngine interface, answer types and the questions every backend asks
+│   │   ├── demo.py           The demo judge: scripted word rules, offline and repeatable
 │   │   ├── jev.py            Jev (TypeSafe) backend: typed questions over HTTP, run in parallel
 │   │   ├── llm.py            Your AI provider as the engine: Anthropic or OpenAI-style structured output
 │   │   ├── local.py          Local cross-encoder reranker (score only)
 │   │   └── select.py         Which backend answers judging, narrowing and reranking, from the settings
+│   ├── demo/
+│   │   ├── __init__.py       Sets up, edits and removes the demo install (Pebble & Co.)
+│   │   ├── story.py          Tells the demo story in the terminal and prints how to connect agents
+│   │   └── company/          The made-up company: google_drive/, github/ and linear/ files
 │   ├── librarian/
 │   │   ├── chunking.py       Splits documents into heading-aware chunks
 │   │   ├── ingestion.py      Sync: list and fetch what changed, hand it to the update layer, handle deletions
@@ -93,7 +103,7 @@ ZeroStore/
 │       └── embeddings.py     Embedder interface, provider embeddings, local fastembed model, hashing fallback
 └── tests/                    Tests: config, tokens, fact store, state, MCP server (in-process, HTTP, stdio), CLI,
                               rules, connectors and engines (fake APIs), chunking, ingestion, the librarian's
-                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync
+                              judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo
 ```
 
 ## What each folder contains
@@ -102,8 +112,9 @@ ZeroStore/
 - `src/zerostore/`: the Python package behind the `zerostore` command.
 - `src/zerostore/access/`: tokens and access levels.
 - `src/zerostore/agents/`: edits to agent settings files (the "check ZeroStore first" line).
-- `src/zerostore/connectors/`: one read-only module per source, plus the shared interface, Google sign-in tokens and decisions.md.
+- `src/zerostore/connectors/`: one read-only module per source, plus the shared interface, Google sign-in tokens, decisions.md and the demo's simulated sources.
 - `src/zerostore/decisions/`: the decision engine: every judgment call as a typed question, answered by Jev, your LLM or a local reranker.
+- `src/zerostore/demo/`: `zerostore demo`: the made-up company Pebble & Co. and the story told about it.
 - `src/zerostore/librarian/`: the librarian's three layers: ingestion (with chunking), update (judgment and the review queue) and retrieval, plus review decisions.
 - `src/zerostore/scheduler/`: timed syncs.
 - `src/zerostore/mcp/`: the one door, the MCP server, plus everything agents read from it.

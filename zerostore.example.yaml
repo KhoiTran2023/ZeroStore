@@ -33,7 +33,8 @@ ai:
   llm_model: mid-tier           # the provider's balanced model, or name any model
   llm_api_key: ${LLM_API_KEY}
   # llm_base_url: http://gpu-box:11434/v1   # only for a self-hosted or proxied endpoint
-  embeddings: provider          # provider, or local (falls back to local if the provider has none)
+  embeddings: provider          # provider, local (falls back to local if the provider has none),
+                                # or basic (word matching only, no model)
 
 # Changes at or above this confidence go live; lower ones wait in the review queue.
 review:
