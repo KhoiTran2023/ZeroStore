@@ -291,6 +291,30 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
     return config
 
 
+def update_drive(
+    path: Path, *, credentials: str | None = None, add: str | None = None, remove: str | None = None
+) -> Config:
+    """Turn on Google Drive with a credentials file, or add or remove one of its folders."""
+    y = _yaml()
+    doc = y.load(read_text(path)) or CommentedMap()
+    if not isinstance(doc, CommentedMap):
+        raise SettingsError(f"{path.name} must be a mapping of settings")
+    drive = _map(_map(doc, "sources"), "google_drive")
+    folders = [str(f) for f in drive.get("folders") or []]
+    if credentials:
+        drive["credentials"] = _plain(credentials)
+    if add and add not in folders:
+        folders.append(add)
+    if remove:
+        folders = [f for f in folders if f != remove]
+    drive["folders"] = _flow(folders)
+    out = io.StringIO()
+    y.dump(doc, out)
+    config = validate(path, out.getvalue())
+    _write(path, out.getvalue())
+    return config
+
+
 def key_state(raw: Any, value: str | None) -> str:
     """How a key is set, for the form: never the key itself."""
     if not value:

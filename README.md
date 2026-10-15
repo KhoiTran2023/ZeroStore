@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer and the background service. Sign in with Google comes next.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, and Sign in with Google. `zerostore report` comes next.
 
 ## Install
 
@@ -55,12 +55,18 @@ zerostore serve --http --open
 
 Serves agents at `/mcp` and opens the web UI at `http://localhost:8765`, signed in with a one-time link. Later, `zerostore ui` opens it signed in again. Behind a reverse proxy, start it with `--behind-https-proxy --public-url https://zs.example.com`. Four pages, in the mockup E design:
 
-- **Setup:** connect your docs, add your AI key (Jev optional), and "Connect to Claude": it creates a token and shows the `claude mcp add` line and the settings for Claude Desktop, Cursor and others.
+- **Setup:** Sign in with Google and pick your Drive folders, add your AI key (Jev optional), and "Connect to Claude": it creates a token and shows the `claude mcp add` line and the settings for Claude Desktop, Cursor and others.
 - **Status:** the last sync and what it changed, what waits for you, sources and agents, the recent log, and charts of changes per day, decisions by outcome, how sure the librarian was, questions per day and median search time.
 - **Review:** each waiting change shows what agents are told now and what they'd be told instead, with approve or reject.
 - **Settings:** a form and a YAML view of `zerostore.yaml`, plus tokens. Saves are checked before anything is written, comments in the file are kept, and keys go to `secrets.env` next to it (readable only by you), referred to as `${ZEROSTORE_LLM_API_KEY}` and so on.
 
 The web UI is a client of the MCP server like any agent: it calls the owner tools with your owner token, so every page is checked and logged. Only an owner token signs in, refused sign-ins are logged and limited to ten a minute, and revoking the token signs that browser out. On `localhost` it refuses other host names (DNS rebinding), every form carries a CSRF token, and the session lives in memory, so restarting `zerostore serve` signs you out. Settings you save apply to syncs (scheduled ones too) right away. Turn the web UI off with `web_ui: false`.
+
+### Sign in with Google
+
+On the setup page, "Sign in with Google Drive" sends you to Google, asks for read-only Drive access and brings you back, then lets you browse My Drive, folders shared with you and shared drives and add the folders ZeroStore should read. The sign-in is saved as `google-credentials.json` next to `zerostore.yaml`, readable only by you; "sign out of Google" revokes it and deletes the file. When ZeroStore runs on another machine, Google ends on a `http://localhost/...` address that doesn't load: paste it into the setup page to finish.
+
+Signing in needs a Google sign-in app (an OAuth client). Until ZeroStore ships with its own, make one in the Google Cloud console: turn on the Google Drive API, set up the OAuth consent screen with yourself as a test user, create an OAuth client ID of type **Desktop app**, and paste its ID and secret on the setup page (saved in `secrets.env` as `ZEROSTORE_GOOGLE_CLIENT_ID` and `ZEROSTORE_GOOGLE_CLIENT_SECRET`). A service-account key shared on your folders still works too: point `credentials:` at it.
 
 ## Keep it running
 
@@ -115,7 +121,7 @@ No token can edit a fact. Facts change only when your sources change. Tokens are
 
 ## What gets read
 
-- **Google Drive:** Google Docs, Sheets (first sheet) and Slides as text, plus plain text and Markdown files, in the folders you list and every folder inside them. Sign in with your Google account or use a service account the folders are shared with.
+- **Google Drive:** Google Docs, Sheets (first sheet) and Slides as text, plus plain text and Markdown files, in the folders you list and every folder inside them. Sign in with your Google account on the setup page, or use a service account the folders are shared with.
 - **GitHub:** written docs on each repo's default branch (`*.md`, `*.txt`, `*.rst` and similar by default), not code.
 - **Linear:** issues and documents of the teams you list.
 

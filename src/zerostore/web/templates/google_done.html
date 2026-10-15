@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Google sign-in · ZeroStore{% endblock %}
+{% block head_extra %}{% if not message %}<meta http-equiv="refresh" content="0;url=/setup?step=1">{% endif %}{% endblock %}
+{% block main_class %}login{% endblock %}
+{% block content %}
+{# Google sends the browser here from its own site, which leaves the session cookie behind;
+   this page then moves on from ZeroStore itself, so the cookie comes along again. #}
+{% if message %}
+<h1 class="m" style="font-size:20px">Google sign-in didn't finish</h1>
+<div class="flash warn" role="alert">{{ message }}</div>
+{% else %}
+<h1 class="m" style="font-size:20px">Signed in to Google</h1>
+<p class="muted" style="margin:0">Taking you back to setup to pick your folders.</p>
+{% endif %}
+<div><a class="btn go" href="/setup?step=1">Back to setup</a></div>
+{% endblock %}
