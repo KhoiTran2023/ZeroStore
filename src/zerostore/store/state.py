@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Columns added after a table first shipped: (table, column, declaration).
 # CREATE TABLE IF NOT EXISTS leaves older files alone, so these are added on open.
@@ -92,6 +92,13 @@ CREATE TABLE IF NOT EXISTS documents (
     synced_at TEXT NOT NULL,
     rejected_fingerprint TEXT,
     source_deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS judgments (
+    engine TEXT NOT NULL,
+    key TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    used_at TEXT NOT NULL,
+    PRIMARY KEY (engine, key)
 );
 CREATE TABLE IF NOT EXISTS locks (
     name TEXT PRIMARY KEY,
@@ -263,6 +270,43 @@ class StateDB:
             cur.execute(
                 "UPDATE documents SET version = '', fingerprint = '', chunks = 0, source_deleted_at = NULL"
             )
+
+    # Remembered judgments -------------------------------------------------
+
+    def judgments(self, engine: str, keys: list[str]) -> dict[str, Any]:
+        """The answers `engine` already gave for these keys; marks them as used today."""
+        found: dict[str, Any] = {}
+        now = utcnow()
+        with self.tx() as cur:
+            for start in range(0, len(keys), 500):  # SQLite caps the number of parameters
+                batch = keys[start : start + 500]
+                marks = ", ".join("?" * len(batch))
+                rows = cur.execute(
+                    f"SELECT key, answer FROM judgments WHERE engine = ? AND key IN ({marks})",
+                    (engine, *batch),
+                ).fetchall()
+                found.update((row["key"], json.loads(row["answer"])) for row in rows)
+                cur.execute(
+                    f"UPDATE judgments SET used_at = ? WHERE engine = ? AND key IN ({marks})",
+                    (now, engine, *batch),
+                )
+        return found
+
+    def save_judgments(self, engine: str, answers: dict[str, Any]) -> None:
+        now = utcnow()
+        with self.tx() as cur:
+            cur.executemany(
+                "INSERT INTO judgments (engine, key, answer, used_at) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(engine, key)"
+                " DO UPDATE SET answer = excluded.answer, used_at = excluded.used_at",
+                [(engine, key, json.dumps(answer), now) for key, answer in answers.items()],
+            )
+
+    def forget_judgments(self, unused_since: str) -> int:
+        """Drop answers nobody has needed since `unused_since` (an ISO time)."""
+        with self.tx() as cur:
+            cur.execute("DELETE FROM judgments WHERE used_at < ?", (unused_since,))
+            return cur.rowcount
 
     # Access log -----------------------------------------------------------
 

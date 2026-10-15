@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, and Sign in with Google. `zerostore report` comes next.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, and remembered keep answers so edits to long documents cost less.
 
 ## Install
 
@@ -97,7 +97,7 @@ ai:
   llm_api_key: ${LLM_API_KEY}
 ```
 
-- **Noise is left out.** "Lunch at noon?" never becomes a company fact. What's kept is tagged with topics.
+- **Noise is left out.** "Lunch at noon?" never becomes a company fact. What's kept is tagged with topics. When you edit a long document, only the sections you changed are asked about again: the answers for unchanged text are remembered, separately for each AI and model, and dropped after six months without use.
 - **Newer wins.** When a new document updates or contradicts a fact from another one, the older fact stops being served. It comes back if the newer document is deleted.
 - **Unsure changes wait for you.** Changes at or above `review.auto_apply_at` (0.80) go live; anything less certain waits in the review queue while agents keep getting the current version. Run `zerostore review`, then `zerostore review approve <id>` or `reject <id>`.
 - **Deleted files are judged too.** A file that was moved is recognised; one that is unclear waits for you, and its facts stay live meanwhile.

@@ -97,6 +97,7 @@ def test_jev_request_shape_and_keep():
     assert req["url"] == "https://api.typesafe.ai/v1/systemone"
     assert req["headers"]["authorization"] == "Bearer tsk_test"
     assert req["body"]["model"] == "jev-latest"
+    assert jev(fake).cache_id == "jev:jev-latest" and jev(fake, model="jev-2").cache_id == "jev:jev-2"
     assert req["body"]["state"] == {"text": "The Pro plan costs $29."}
     assert req["body"]["questions"]["keep"]["type"] == "noul"
     assert "`text`" in req["body"]["questions"]["keep"]["instructions"]
@@ -246,6 +247,10 @@ def test_llm_anthropic_classify_batches_and_forces_the_answer_tool():
     ]
     assert enum == [*TOPICS, NO_TOPIC]
     assert engine.label == "your LLM (claude-sonnet-5-5)"
+    assert engine.cache_id == "llm:anthropic:claude-sonnet-5-5"
+    assert llm(
+        FakeLLM("openrouter"), provider="openrouter", model="anthropic/claude-sonnet-5-5"
+    ).cache_id == ("llm:openrouter:anthropic/claude-sonnet-5-5")
 
 
 def test_llm_splits_large_batches():

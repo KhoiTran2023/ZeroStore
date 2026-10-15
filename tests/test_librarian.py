@@ -177,6 +177,93 @@ def test_an_engine_failure_changes_nothing(zs, drive, ingest, engine):
     assert [c.action for c in ingest.sync().changes] == ["updated"]
 
 
+# Remembered keep answers ----------------------------------------------------------
+
+HANDBOOK = {
+    "Refunds": "Refunds are allowed within 30 days of purchase.",
+    "Support": "Support answers within one business day.",
+    "Lunch": "Lunch at noon?",
+    "Security": "Laptops use full-disk encryption.",
+}
+
+
+def handbook(**changed: str) -> str:
+    return "\n\n".join(f"# {title}\n\n{changed.get(title, body)}" for title, body in HANDBOOK.items())
+
+
+def test_an_edit_only_asks_about_the_sections_that_changed(zs, drive, ingest, engine):
+    engine.keep_rules = {"lunch": 0.03}
+    drive.put("handbook", "Handbook", handbook())
+    first = ingest.sync()
+    assert len(engine.asked_keep) == 4 and first.remembered == 0
+    engine.asked_keep.clear()
+
+    drive.put("handbook", "Handbook", handbook(Support="Support answers within four hours."), version="v2")
+    report = ingest.sync()
+    assert engine.asked_keep == ["Support\nSupport answers within four hours."]
+    assert report.remembered == 3
+    assert report.changes[0].note == "1 noise chunk left out"  # the remembered "no" still counts
+    chunks = zs.facts.chunks_of("google_drive:handbook")
+    assert [c["text"].split("\n")[0] for c in chunks] == ["Refunds", "Support", "Security"]
+    assert "four hours" in chunks[1]["text"]
+
+
+def test_the_same_text_in_another_document_is_not_asked_again(zs, drive, github, ingest, engine):
+    drive.put("pricing", "Pricing 2026", PRICE_2026)
+    ingest.sync()
+    engine.asked_keep.clear()
+    github.put("readme", "README", PRICE_2026)
+    report = ingest.sync()
+    assert engine.asked_keep == [] and report.remembered == 1
+    assert zs.facts.chunks_of("github:readme")[0]["topics"] == ["pricing and plans"]
+
+
+def test_another_engine_or_new_topics_ask_again(zs, drive, ingest, engine):
+    drive.put("pricing", "Pricing 2026", PRICE_2026)
+    ingest.sync()
+
+    other = FakeEngine()
+    other.label = "your LLM (claude-sonnet-5-5)"
+    ingest.librarian.judge = other
+    drive.put("pricing", "Pricing 2026", PRICE_2026 + "\n\nBilled yearly.", version="v2")
+    ingest.sync()
+    assert len(other.asked_keep) == 1  # the new engine never answered it
+
+    other.asked_keep.clear()
+    zs.config.retrieval.topics = [*zs.config.retrieval.topics, "billing"]
+    drive.put("pricing", "Pricing 2026", PRICE_2026 + "\n\nBilled monthly.", version="v3")
+    ingest.sync()
+    assert len(other.asked_keep) == 1  # a different topic list is a different question
+
+
+def test_answers_nobody_needed_for_half_a_year_are_dropped(zs, drive, ingest, engine):
+    drive.put("handbook", "Handbook", handbook())
+    ingest.sync()
+    assert len(zs.state.query("SELECT key FROM judgments")) == 4
+    with zs.state.tx() as cur:
+        cur.execute("UPDATE judgments SET used_at = '2026-01-01T00:00:00+00:00' WHERE rowid = 1")
+    ingest.sync()
+    assert len(zs.state.query("SELECT key FROM judgments")) == 3
+
+    with zs.state.tx() as cur:
+        cur.execute("UPDATE judgments SET used_at = '2026-01-01T00:00:00+00:00'")
+    ingest.sync()
+    assert zs.state.query("SELECT key FROM judgments") == []
+    engine.asked_keep.clear()
+    drive.put("handbook", "Handbook", handbook(Support="Support answers within four hours."), version="v2")
+    ingest.sync()
+    assert len(engine.asked_keep) == 4  # nothing was remembered, so every section is asked
+
+
+def test_a_failed_judgment_remembers_nothing(zs, drive, ingest, engine):
+    engine.fail = "route"
+    drive.put("pricing", "Pricing 2026", PRICE_2026)
+    assert "couldn't be judged" in ingest.sync().sources[0].failed[0]
+    assert zs.state.query("SELECT key FROM judgments") == []
+    engine.fail = None
+    assert [c.action for c in ingest.sync().changes] == ["added"]
+
+
 # Newer wins across documents ---------------------------------------------------
 
 

@@ -83,6 +83,7 @@ class FakeEngine(DecisionEngine):
         self.compare_confidence = 0.97
         self.delete_answer = ("retire", 0.95)
         self.calls: Counter[str] = Counter()
+        self.asked_keep: list[str] = []  # every text `keep` was asked about, in order
         self.seen_delete: list[tuple[DeletedFile, list[Candidate]]] = []
         self.fail: str | None = None
 
@@ -93,6 +94,7 @@ class FakeEngine(DecisionEngine):
 
     def keep(self, texts):
         self._check("keep")
+        self.asked_keep.extend(texts)
         out = []
         for text in texts:
             low = text.lower()
