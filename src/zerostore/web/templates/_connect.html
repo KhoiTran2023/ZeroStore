@@ -1,0 +1,19 @@
+{% set c = f.commands %}
+<div class="copyable">
+  <span class="cmd">Claude Code: run this in a terminal</span>
+  <pre class="copy" id="cmd-claude">{{ c.claude_code }}</pre>
+  <span><button type="button" class="btn small" data-copy="cmd-claude">Copy</button></span>
+</div>
+<div class="copyable">
+  <span class="cmd">Claude Desktop, Cursor and most others: add this to the app's MCP settings file</span>
+  <pre class="copy" id="cmd-json">{{ c.json }}</pre>
+  <span><button type="button" class="btn small" data-copy="cmd-json">Copy</button></span>
+</div>
+{% if c.http %}
+<div class="copyable">
+  <span class="cmd">Agents that connect over HTTP</span>
+  <pre class="copy" id="cmd-http">{{ c.http }}</pre>
+  <span><button type="button" class="btn small" data-copy="cmd-http">Copy</button></span>
+</div>
+{% endif %}
+<span class="cmd">Then tell the agent to look things up: <code>zerostore connect claude</code> adds "Check ZeroStore before assuming anything about the company." to CLAUDE.md.</span>

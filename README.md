@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), and `zerostore demo`. The web setup page comes next.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, and the web UI. The one-line installer and Sign in with Google come next.
 
 ## Try it in 60 seconds
 
@@ -15,7 +15,7 @@ zerostore demo
 
 `zerostore demo` loads Pebble & Co., a made-up startup with Google Docs, a GitHub repo and Linear issues, and plays out the story: two agents say the Pro plan costs $20, the CEO edits the pricing doc to $29, `zerostore sync` reports `1 change · Pricing 2026 · demo judge confidence 0.97`, and both agents now answer $29. Then a "maybe we drop the free tier?" note lands at confidence 0.54 and waits for review instead of changing the answer. It needs no accounts, keys or network, and never touches your real setup.
 
-To try it with your own agents, run `zerostore demo start`. It prints a `claude mcp add` line (and the same for Cursor or Codex) with a token for Pebble & Co. Ask your agent what the Pro plan costs, run `zerostore demo change-price` and the sync command it shows, then ask again. The demo judges with a small set of scripted rules; with `JEV_API_KEY` set, Jev judges instead. `zerostore demo remove` deletes it.
+To try it with your own agents, run `zerostore demo start`. It prints a `claude mcp add` line (and the same for Cursor or Codex) with a token for Pebble & Co. Ask your agent what the Pro plan costs, run `zerostore demo change-price` and the sync command it shows, then ask again. The demo judges with a small set of scripted rules; with `JEV_API_KEY` set, Jev judges instead. `zerostore demo remove` deletes it. To see it in the browser, run the `zerostore serve ... --http --open` line it prints.
 
 ## Try the core
 
@@ -38,6 +38,21 @@ sources:
 After that, `zerostore serve` also re-syncs on the schedule in your settings (daily at 06:00 by default), so agents always get the current version.
 
 `zerostore init` also offers to add one line to your agent's settings file (`CLAUDE.md`, `AGENTS.md` or `.cursorrules`) so agents check ZeroStore before assuming anything about the company. `zerostore connect --undo` removes it.
+
+## The web UI
+
+```bash
+zerostore serve --http --open
+```
+
+Serves agents at `/mcp` and opens the web UI at `http://localhost:8765`, signed in with a one-time link. Later, `zerostore ui` opens it signed in again. Behind a reverse proxy, start it with `--behind-https-proxy --public-url https://zs.example.com`. Four pages, in the mockup E design:
+
+- **Setup:** connect your docs, add your AI key (Jev optional), and "Connect to Claude": it creates a token and shows the `claude mcp add` line and the settings for Claude Desktop, Cursor and others.
+- **Status:** the last sync and what it changed, what waits for you, sources and agents, the recent log, and charts of changes per day, decisions by outcome, how sure the librarian was, questions per day and median search time.
+- **Review:** each waiting change shows what agents are told now and what they'd be told instead, with approve or reject.
+- **Settings:** a form and a YAML view of `zerostore.yaml`, plus tokens. Saves are checked before anything is written, comments in the file are kept, and keys go to `secrets.env` next to it (readable only by you), referred to as `${ZEROSTORE_LLM_API_KEY}` and so on.
+
+The web UI is a client of the MCP server like any agent: it calls the owner tools with your owner token, so every page is checked and logged. Only an owner token signs in, refused sign-ins are logged and limited to ten a minute, and revoking the token signs that browser out. On `localhost` it refuses other host names (DNS rebinding), every form carries a CSRF token, and the session lives in memory, so restarting `zerostore serve` signs you out. Settings you save apply to syncs (scheduled ones too) right away. Turn the web UI off with `web_ui: false`.
 
 ## The librarian's judgment
 
@@ -68,7 +83,7 @@ The MCP server is the only way in, and every request carries a token. Each token
 |---|---|---|
 | `default` | Non-confidential facts | Search, read, propose facts for you to approve |
 | `confidential` | Everything | Search, read, propose facts for you to approve |
-| `owner` | Everything | Search, read, manage tokens and the review queue |
+| `owner` | Everything | Search, read, manage tokens and the review queue, see status and activity, sign in to the web UI |
 
 No token can edit a fact. Facts change only when your sources change. Tokens are stored hashed, every request is logged, and the server binds to `localhost` unless you give it HTTPS.
 
@@ -85,7 +100,8 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | Command | What it does |
 |---|---|
 | `zerostore init` | Creates settings, data folders and your owner token |
-| `zerostore serve` | Runs the MCP server over stdio (one agent) or `--http` (many), plus timed syncs |
+| `zerostore serve` | Runs the MCP server over stdio (one agent) or `--http` (many, plus the web UI), plus timed syncs |
+| `zerostore ui` | Prints and opens a one-time sign-in link for the web UI |
 | `zerostore sync` | Checks every source for changes now |
 | `zerostore review` | Lists what waits for you; `review approve <id>` / `review reject <id>` decide |
 | `zerostore reindex` | Rebuilds the fact store from your sources (for example after switching embeddings) |

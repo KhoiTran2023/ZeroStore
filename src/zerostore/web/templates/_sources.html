@@ -1,0 +1,18 @@
+{# Source fields, shared by settings and setup. Needs v (form values). #}
+<div class="stack">
+  <label class="check"><input type="checkbox" name="drive_on" value="1"{% if v.drive %} checked{% endif %}> Google Drive</label>
+  <div class="grid">
+    <label><span>Folders <span class="hint">comma-separated, e.g. Company, Product</span></span><input class="f" type="text" name="drive_folders" value="{{ (v.drive.folders if v.drive else [])|join(', ') }}"></label>
+    <label><span>Google credentials file <span class="hint">service-account key or saved sign-in</span></span><input class="f m" type="text" name="drive_credentials" value="{{ v.drive.credentials if v.drive and v.drive.credentials else '' }}" placeholder="~/.zerostore/google-credentials.json"></label>
+  </div>
+  <label class="check"><input type="checkbox" name="github_on" value="1"{% if v.github %} checked{% endif %}> GitHub</label>
+  <div class="grid">
+    <label><span>Repos <span class="hint">owner/name, comma-separated</span></span><input class="f m" type="text" name="github_repos" value="{{ (v.github.repos if v.github else [])|join(', ') }}"></label>
+    <label><span>Token <span class="hint">for private repos · {{ v.github_token }}</span></span><input class="f" type="password" name="github_token" autocomplete="off" placeholder="leave blank to keep"></label>
+  </div>
+  <label class="check"><input type="checkbox" name="linear_on" value="1"{% if v.linear %} checked{% endif %}> Linear</label>
+  <div class="grid">
+    <label><span>Teams <span class="hint">comma-separated</span></span><input class="f" type="text" name="linear_teams" value="{{ (v.linear.teams if v.linear else [])|join(', ') }}"></label>
+    <label><span>API key <span class="hint">{{ v.linear_key }}</span></span><input class="f" type="password" name="linear_key" autocomplete="off" placeholder="leave blank to keep"></label>
+  </div>
+</div>

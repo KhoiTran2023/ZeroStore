@@ -1,0 +1,16 @@
+<tr>
+  <td class="cmd">{{ local_time(r.at, "%m-%d %H:%M:%S") }}</td>
+  {% if r.kind == "change" %}
+  <td class="{{ 'warn' if r.action in ('change_queued', 'delete_queued', 'sync_failed') else '' }}">{{ labels.get(r.action, r.action) }}</td>
+  <td class="wrap">{{ r.detail or "" }}</td>
+  <td class="cmd">{{ source_names.get(r.source, r.source) if r.source else "" }}</td>
+  <td>{{ "%.2f"|format(r.confidence) if r.confidence is not none else "" }}</td>
+  <td class="cmd">{{ r.engine or "" }}</td>
+  {% else %}
+  <td class="{{ 'warn' if 'refused' in r.action else '' }}">{{ r.action }}</td>
+  <td class="wrap">{{ r.detail or "" }}</td>
+  <td class="cmd">{{ r.token }}</td>
+  <td></td>
+  <td class="cmd">{{ (r.duration_ms ~ "ms") if r.duration_ms is not none else "" }}</td>
+  {% endif %}
+</tr>

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import socket
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -78,6 +79,8 @@ class SyncReport:
     sources: list[SourceResult] = field(default_factory=list)
     changes: list[DocChange] = field(default_factory=list)
     engine: str | None = None  # who judged the changes, e.g. "Jev"
+    judged: int = 0  # documents and deletions the engine judged
+    judge_seconds: float = 0.0  # time spent waiting on the engine for them
 
     @property
     def ok(self) -> bool:
@@ -124,6 +127,8 @@ class SyncReport:
             sources=[SourceResult(**r) for r in data["sources"]],
             changes=[DocChange(**c) for c in data["changes"]],
             engine=data.get("engine"),
+            judged=data.get("judged", 0),
+            judge_seconds=data.get("judge_seconds", 0.0),
         )
 
 
@@ -340,11 +345,17 @@ class Ingestor:
                     state.touch_document(doc_id, doc.version)
                 result.unchanged += 1
                 continue
+            judged = connector.name != "decisions" and self.judge is not None
+            started = time.perf_counter()
             try:
-                plan = librarian.plan(doc, confidential, record, judged=connector.name != "decisions")
+                plan = librarian.plan(doc, confidential, record, judged=judged)
             except JUDGE_ERRORS as exc:
                 result.failed.append(f"{ref.title}: couldn't be judged, kept as it was ({exc})")
                 continue
+            finally:
+                if judged:
+                    report.judged += 1
+                    report.judge_seconds += time.perf_counter() - started
             if plan.confidence is not None and plan.confidence < librarian.threshold:
                 librarian.queue(plan, rules=rules_fingerprint(config))
                 if record:  # don't fetch this version again while it waits
@@ -415,6 +426,7 @@ class Ingestor:
             return
         if any(item["kind"] == "delete" for item in state.pending_for_document(record["doc_id"])):
             return  # already waiting for a person
+        started = time.perf_counter()
         try:
             decision = librarian.decide_delete(record, added)
         except JUDGE_ERRORS as exc:
@@ -422,6 +434,10 @@ class Ingestor:
                 f"{record['title']}: deletion couldn't be judged, facts kept for now ({exc})"
             )
             return
+        finally:
+            if self.judge is not None:
+                report.judged += 1
+                report.judge_seconds += time.perf_counter() - started
         conf, engine = decision.confidence, decision.engine
         if decision.action == "retire":
             librarian.retire(record, "no longer in the source", confidence=conf, engine=engine)

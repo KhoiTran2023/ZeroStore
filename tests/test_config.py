@@ -102,3 +102,20 @@ def test_decisions_file_location(monkeypatch, tmp_path):
     assert parse_config({"sources": {}}).decisions_path() == tmp_path / "home" / "decisions.md"
     custom = parse_config({"sources": {}, "decisions_file": str(tmp_path / "d.md")})
     assert custom.decisions_path() == tmp_path / "d.md"
+
+
+def test_bare_off_in_yaml_means_off(tmp_path):
+    path = tmp_path / "zerostore.yaml"
+    path.write_text("sources: {}\nretrieval:\n  narrow_with: off\n  rerank_with: off\n")
+    retrieval = load_config(path).retrieval
+    assert (retrieval.narrow_with, retrieval.rerank_with) == ("off", "off")
+
+
+def test_secrets_env_fills_in_keys(tmp_path, monkeypatch):
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    path = tmp_path / "zerostore.yaml"
+    path.write_text("sources: {}\nai:\n  jev_api_key: ${JEV_API_KEY}\n")
+    (tmp_path / "secrets.env").write_text("# keys\nJEV_API_KEY='jev-123'\n\nnot a line\n")
+    assert load_config(path).ai.jev_api_key == "jev-123"
+    monkeypatch.setenv("JEV_API_KEY", "from-env")
+    assert load_config(path).ai.jev_api_key == "from-env"

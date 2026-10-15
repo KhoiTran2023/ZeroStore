@@ -45,28 +45,49 @@ def is_due(state: StateDB, schedule: str, now: datetime, tz: tzinfo | None = Non
 
 
 class SyncScheduler:
+    """Runs syncs on a cron schedule.
+
+    With `schedule=None` the schedule is read from the live config on every tick,
+    and `renew` (when given) builds a fresh Ingestor for each run, so sources,
+    AI keys and the schedule saved from the web UI apply without a restart.
+    """
+
     def __init__(
         self,
         ingestor: Ingestor,
-        schedule: str,
+        schedule: str | None,
         tick_seconds: float = 60,
         clock: Callable[[], datetime] = _now,
         tz: tzinfo | None = None,
+        renew: Callable[[], Ingestor] | None = None,
     ):
         self.tz = tz
         self.ingestor = ingestor
-        self.schedule = schedule
+        self._schedule = schedule
+        self.renew = renew
         self.tick = tick_seconds
         self.clock = clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    @property
+    def schedule(self) -> str:
+        return self._schedule or self.ingestor.zs.config.sync.schedule
+
     def run_if_due(self) -> bool:
         """Run one scheduled sync if it is due. Returns True if a sync ran."""
-        state = self.ingestor.zs.state
+        from zerostore.librarian.ingestion import source_names
+
+        zs = self.ingestor.zs
         now = self.clock()
-        if not is_due(state, self.schedule, now, self.tz):
+        if not is_due(zs.state, self.schedule, now, self.tz):
             return False
+        if not source_names(zs.config):
+            zs.state.set_meta(ANCHOR_KEY, now.isoformat())  # nothing to read yet; wait for the next slot
+            return False
+        if self.renew:
+            self.ingestor = self.renew()
+        state = zs.state
         try:
             report = self.ingestor.sync()
         except SyncBusy:

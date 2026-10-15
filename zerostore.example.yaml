@@ -1,6 +1,7 @@
 # ZeroStore settings, with every option shown.
 # Only `sources` is required. The setup page writes this file for most people.
-# Values like ${LLM_API_KEY} are read from environment variables, so keys never
+# Values like ${LLM_API_KEY} are read from environment variables, or from
+# secrets.env next to this file (where the web UI saves keys), so keys never
 # need to be written here. Tokens and access levels are managed with
 # `zerostore token`, never in this file.
 
@@ -67,7 +68,7 @@ confidential:
 
 agent_proposals: true           # agents may propose facts for you to approve
 decisions_file: ~/.zerostore/decisions.md   # approved proposals land here and are read back as a source
-web_ui: true
+web_ui: true                    # the web UI at / when running `zerostore serve --http`
 
 # Where each part runs and keeps its data.
 servers:

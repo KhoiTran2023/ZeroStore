@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 
 from zerostore.app import ZeroStore
-from zerostore.config import CONFIG_FILENAME, home_dir, load_config
+from zerostore.config import CONFIG_FILENAME, OWNER_TOKEN_FILE, home_dir, load_config
 
 COMPANY = Path(__file__).parent / "company"
 MARKER = ".zerostore-demo"  # only a folder holding this file is ever deleted by the demo
@@ -69,6 +69,11 @@ class DemoError(Exception):
     """The demo can't do that (not set up yet, or a folder it must not touch)."""
 
 
+def _write_private(path: Path, text: str) -> None:
+    path.write_text(text)
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+
+
 def _q(path: Path) -> str:
     return json.dumps(str(path))  # a quoted string is valid YAML for any path
 
@@ -81,6 +86,7 @@ class Demo:
         self.is_default = self.home == default
         self.reset = False  # set by install() when it replaced an earlier demo
         self._kept_tokens: dict[str, str] = {}
+        self._kept_owner: str | None = None
 
     def command(self, sub: str) -> str:
         """The `zerostore demo` command for this demo, with --home when it isn't the default one."""
@@ -106,6 +112,7 @@ class Demo:
         once their ZeroStore connection restarts.
         """
         self._kept_tokens = self.tokens() if self.installed else {}
+        self._kept_owner = self.owner_token() if self.installed else None
         self.reset = self.remove()
         self.home.mkdir(parents=True)
         os.chmod(self.home, stat.S_IRWXU)
@@ -158,13 +165,22 @@ class Demo:
         return ZeroStore.open(load_config(self.config_path), quiet=True)
 
     def create_tokens(self, zs: ZeroStore) -> dict[str, str]:
-        """A default-level token per demo agent, saved so the connect commands can be shown again."""
+        """A default-level token per demo agent, saved so the connect commands can be shown again.
+
+        Also an owner token in the demo's own owner-token file, for signing in to the web UI.
+        """
         kept = self._kept_tokens
         tokens = {name: zs.tokens.create(name, "default", raw=kept.get(name))[0] for name in AGENTS}
-        path = self.home / TOKENS_FILE
-        path.write_text(json.dumps(tokens, indent=2))
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        _write_private(self.home / TOKENS_FILE, json.dumps(tokens, indent=2))
+        owner = zs.tokens.create("owner", "owner", raw=self._kept_owner)[0]
+        _write_private(self.home / OWNER_TOKEN_FILE, owner + "\n")
         return tokens
+
+    def owner_token(self) -> str | None:
+        try:
+            return (self.home / OWNER_TOKEN_FILE).read_text().strip() or None
+        except OSError:
+            return None
 
     def tokens(self) -> dict[str, str]:
         try:

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Set up · ZeroStore{% endblock %}
+{% block brand_extra %}<span class="v">{{ version }}</span>{% endblock %}
+{% block nav %}<span class="cmd">setup · {{ done.values()|select|list|length }}/3 connected · <a href="/status">status</a></span>{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div>
+  <h1 class="m" style="font-size:20px">Connect three things, then run the first sync.</h1>
+  <p style="margin:6px 0 0" class="muted">Click a box to set it up. Everything stays on this computer.</p>
+</div>
+
+{% macro node(n, label, icon) %}
+<a class="node{% if step == n %} sel{% endif %}" href="/setup?step={{ n }}"{% if step == n %} aria-current="step"{% endif %}>
+  {{ icon|safe }}
+  <span class="m" style="font-weight:700">{{ n }} · {{ label }}</span>
+  <span class="m {{ 'ok' if done[n] else 'warn' }}" style="font-size:12.5px">{{ "✓ ok" if done[n] else "○ not set" }}</span>
+</a>
+{% endmacro %}
+<div role="group" aria-label="Pipeline" class="pipeline">
+  {{ node(1, "your docs", '<svg width="26" height="30" viewBox="0 0 48 56" aria-hidden="true"><path d="M4 4h28l12 12v36H4z" fill="none" stroke="#E8E6E1" stroke-width="3.5" stroke-linejoin="round"/><path d="M32 4v12h12" fill="none" stroke="#E8E6E1" stroke-width="3.5"/></svg>') }}
+  <span class="arrow" aria-hidden="true">──▶</span>
+  {{ node(2, "librarian", '<svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="none" stroke="#E8E6E1" stroke-width="3.5"/><path d="M26 10 16 27h8l-2 11 10-17h-8z" fill="none" stroke="#E8E6E1" stroke-width="3" stroke-linejoin="round"/></svg>') }}
+  <span class="arrow" aria-hidden="true">──▶</span>
+  <div class="node fixed">
+    <svg width="26" height="30" viewBox="0 0 40 46" aria-hidden="true"><path d="M3 8v30c0 3 8 5 17 5s17-2 17-5V8" fill="none" stroke="#8B949E" stroke-width="3.5"/><ellipse cx="20" cy="8" rx="17" ry="5" fill="none" stroke="#8B949E" stroke-width="3.5"/></svg>
+    <span class="m" style="font-weight:700">fact store</span><span class="m" style="font-size:12.5px">automatic</span>
+  </div>
+  <span class="arrow" aria-hidden="true">──▶</span>
+  {{ node(3, "your agents", '<svg width="36" height="30" viewBox="0 0 56 46" aria-hidden="true"><rect x="3" y="4" width="50" height="14" rx="7" fill="none" stroke="#E8E6E1" stroke-width="3"/><rect x="3" y="26" width="50" height="14" rx="7" fill="none" stroke="#E8E6E1" stroke-width="3"/></svg>') }}
+</div>
+
+<section class="box stack" style="padding:20px">
+  {% if step == 1 %}
+  <h2 style="margin:0;font-size:16px">your docs</h2>
+  <p style="margin:0" class="muted">ZeroStore reads these on every sync. It never edits them. Sign in with Google comes in a later version; for now point it at a Google credentials file (a service-account key shared on your folders).</p>
+  <form method="post" action="/settings" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><input type="hidden" name="sections" value="sources"><input type="hidden" name="back" value="/setup?step=2">
+    {% include "_sources.html" %}
+    <div><button class="btn go" type="submit">Save</button></div>
+  </form>
+  {% elif step == 2 %}
+  <h2 style="margin:0;font-size:16px">librarian <span class="muted" style="font-weight:400">· the AI that judges what changed</span></h2>
+  <p style="margin:0" class="muted">Without an AI key every change is applied as it is. With one, ZeroStore leaves out small talk, spots when a newer document changes an older answer, and asks you when it isn't sure.</p>
+  <form method="post" action="/settings" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ v.version }}"><input type="hidden" name="sections" value="ai"><input type="hidden" name="back" value="/setup?step=3">
+    {% include "_ai.html" %}
+    <div><button class="btn go" type="submit">Save</button></div>
+  </form>
+  {% else %}
+  <h2 style="margin:0;font-size:16px">your agents</h2>
+  <p style="margin:0" class="muted">Each agent gets its own token, so you can see who asked what and revoke one without touching the others.</p>
+  <form method="post" action="/tokens" class="actions" style="align-items:end">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/setup?step=3">
+    <label style="flex:1 1 200px"><span>Name</span><input class="f" type="text" name="name" value="claude-code" required></label>
+    <label><span>Access</span><select class="f" name="level"><option value="confidential">confidential (sees everything)</option><option value="default">default (no confidential facts)</option></select></label>
+    <button class="btn go" type="submit">Connect to Claude</button>
+  </form>
+  <span class="cmd">creates a token and shows the line for Claude Code and the settings for Claude Desktop, Cursor and others · $ zerostore token create --name claude-code</span>
+  {% endif %}
+</section>
+
+<div class="actions" style="justify-content:flex-end">
+  <span class="cmd">{% if scheduled %}then {{ schedule }}{% else %}timed syncs are off in this server{% endif %}</span>
+  <form method="post" action="/setup/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="btn go"{% if not done[1] %} disabled{% endif %}>Run first sync</button></form>
+</div>
+{% endblock %}

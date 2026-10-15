@@ -75,6 +75,47 @@ def describe(item: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in view.items() if v is not None}
 
 
+SHOWN_TEXTS = 3
+SHOWN_CHARS = 400
+
+
+def _shown(document: str, text: str) -> dict[str, str]:
+    text = text.strip()
+    if len(text) > SHOWN_CHARS:
+        text = text[: SHOWN_CHARS - 3].rstrip() + "..."
+    return {"document": document, "text": text}
+
+
+def before_after(zs: ZeroStore, item: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    """What agents are told now, and what they'd be told if the item is approved.
+
+    For a change: the document's text that would go away plus other documents'
+    facts it would hide, against its new text. For a delete: the document's
+    facts. For a proposal: the proposed fact.
+    """
+    p = item["payload"]
+    before: list[dict[str, str]] = []
+    after: list[dict[str, str]] = []
+    if item["kind"] == "change":
+        title, doc_id = p["title"], p["record"]["doc_id"]
+        live = [r["text"] for r in zs.facts.chunks_of(doc_id) if not r.get("superseded_by")]
+        new = [c["text"] for c in p["chunks"]]
+        before = [_shown(title, t) for t in live if t not in set(new)]
+        for s in p.get("supersedes", []):
+            if s.get("by_doc") != doc_id:
+                continue
+            row = zs.facts.get(s["chunk_id"], include_confidential=True)
+            if row and not row.get("superseded_by"):
+                before.append(_shown(s["title"], row["text"]))
+        after = [_shown(title, t) for t in new if t not in set(live)]
+    elif item["kind"] == "delete":
+        live = zs.facts.chunks_of(item["doc_id"] or "")
+        before = [_shown(p["title"], r["text"]) for r in live if not r.get("superseded_by")]
+    else:
+        after = [_shown("proposed fact", p.get("fact") or "")]
+    return {"before": before[:SHOWN_TEXTS], "after": after[:SHOWN_TEXTS]}
+
+
 def decide(
     zs: ZeroStore,
     item_id: int,

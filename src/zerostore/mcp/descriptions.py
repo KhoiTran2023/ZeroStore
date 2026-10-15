@@ -56,7 +56,8 @@ TOKEN_LIST = "Owner only. List active access tokens with their names, levels and
 TOKEN_REVOKE = "Owner only. Revoke an access token by its id; agents using it lose access immediately."
 REVIEW_LIST = (
     "Owner only. List items waiting for a person's decision: low-confidence changes, "
-    "deleted files the librarian wasn't sure about, and facts agents proposed."
+    "deleted files the librarian wasn't sure about, and facts agents proposed. Each item has `before` "
+    "(what agents are told now) and `after` (what they'd be told if approved)."
 )
 REVIEW_DECIDE = (
     "Owner only. Approve or reject a review item by its id. For an agent proposal, `fact` may "
@@ -65,4 +66,12 @@ REVIEW_DECIDE = (
 SYNC_NOW = (
     "Owner only. Check every connected source for changes now instead of waiting for the schedule, "
     "and report what changed."
+)
+STATUS = (
+    "Owner only. How ZeroStore is doing: sources and document counts, the last sync and what it changed, "
+    "what waits for review, tokens and how often each asked in the last day, and two weeks of daily numbers."
+)
+ACTIVITY = (
+    "Owner only. The most recent changes ZeroStore made (and why) and the requests agents sent, newest "
+    "first. `kind` is 'all', 'changes' or 'questions'."
 )

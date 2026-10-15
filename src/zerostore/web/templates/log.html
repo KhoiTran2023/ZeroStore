@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Log · ZeroStore{% endblock %}
+{% block content %}
+<div>
+  <div><b class="m"># log</b> · every change to the fact store, who decided and why, and every request agents made.</div>
+  <div class="cmd">stored in state.sqlite (tables audit and access_log)</div>
+</div>
+<form method="get" action="/log" class="actions" style="align-items:end">
+  <label style="flex:1 1 280px"><span>search</span><input class="f" type="search" name="q" value="{{ q }}" placeholder="pricing"></label>
+  <label><span>show</span><select class="f" name="kind">
+    {% for k, name in [("all", "everything"), ("changes", "changes"), ("questions", "requests")] %}<option value="{{ k }}"{% if kind == k %} selected{% endif %}>{{ name }}</option>{% endfor %}
+  </select></label>
+  <button class="btn" type="submit">Filter</button>
+</form>
+<div class="scroll">
+  <table class="nowrap">
+    <thead><tr><th>time</th><th>what</th><th>detail</th><th>source / token</th><th>conf</th><th>by / took</th></tr></thead>
+    <tbody>{% for r in rows %}{% include "_logrow.html" %}{% else %}<tr><td colspan="6" class="muted">Nothing matches.</td></tr>{% endfor %}</tbody>
+  </table>
+</div>
+<div class="cmd">showing {{ rows|length }} most recent{% if q %} matching “{{ q }}”{% endif %}</div>
+{% endblock %}

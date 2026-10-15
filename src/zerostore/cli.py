@@ -22,7 +22,15 @@ import typer
 from zerostore import __version__
 from zerostore.access.tokens import AccessLevel
 from zerostore.agents import rules
-from zerostore.config import CONFIG_FILENAME, Config, ConfigError, home_dir, load_config
+from zerostore.config import (
+    CONFIG_FILENAME,
+    OWNER_TOKEN_FILE,
+    Config,
+    ConfigError,
+    home_dir,
+    load_config,
+    resolve_config_path,
+)
 from zerostore.mcp.descriptions import AGENT_RULE
 
 app = typer.Typer(
@@ -44,7 +52,6 @@ demo_app = typer.Typer(
 )
 app.add_typer(demo_app, name="demo")
 
-OWNER_TOKEN_FILE = "owner-token"
 
 CONFIG_TEMPLATE = """\
 # ZeroStore settings. Only `sources` is required.
@@ -191,15 +198,20 @@ def serve(
         False, help="Allow plain HTTP on a non-local address because a proxy in front terminates HTTPS."
     ),
     schedule: bool = typer.Option(True, "--schedule/--no-schedule", help="Run timed syncs in this process."),
+    open_browser: bool = typer.Option(False, "--open", help="With --http, open the web UI in your browser."),
+    public_url: str = typer.Option(
+        None, help="The address people and agents use, e.g. https://zs.example.com (default: this machine)."
+    ),
     config: Path = ConfigOption,
 ) -> None:
-    """Run the MCP server (stdio for one agent, or HTTP for many), plus timed syncs."""
+    """Run the MCP server (stdio for one agent, or HTTP for many, with the web UI), plus timed syncs."""
     zs = _open(config, quiet=False)
-    if schedule and _has_sources(zs.config):
+    # Over HTTP the scheduler starts even with no sources yet: the web UI can add them while it runs.
+    if schedule and (http or _has_sources(zs.config)):
         from zerostore.librarian.ingestion import Ingestor
         from zerostore.scheduler.runner import SyncScheduler
 
-        SyncScheduler(Ingestor(zs), zs.config.sync.schedule).start()
+        SyncScheduler(Ingestor(zs), None, renew=lambda: Ingestor(zs)).start()
     if not http:
         _serve_stdio(zs)
         return
@@ -219,15 +231,79 @@ def serve(
     import uvicorn
 
     scheme = "https" if tls_cert else "http"
-    typer.echo(f"ZeroStore MCP server on {scheme}://{host}:{port}/mcp", err=True)
+    base = (public_url or f"{scheme}://{_url_host(host)}:{port}").rstrip("/")
+    typer.echo(f"ZeroStore MCP server on {base}/mcp", err=True)
+    config_path = resolve_config_path(config)
+    if zs.config.web_ui:
+        zs.state.set_meta(WEB_URL_KEY, base)  # for `zerostore ui`
+        if open_browser:
+            import threading
+            import webbrowser
+
+            # A sign-in code is made only when asked for, so none sits in service logs.
+            threading.Timer(1.0, webbrowser.open, args=(_login_link(zs, config_path, base),)).start()
+        typer.echo(f"Web UI: {base}  (`zerostore ui` opens it signed in)", err=True)
     uvicorn.run(
-        create_http_app(zs, host=host),
+        create_http_app(
+            zs,
+            host=host,
+            config_path=config_path,
+            mcp_url=f"{base}/mcp",
+            behind_proxy=behind_https_proxy,
+            scheduled=schedule,
+        ),
         host=host,
         port=port,
         ssl_certfile=str(tls_cert) if tls_cert else None,
         ssl_keyfile=str(tls_key) if tls_key else None,
         log_level="warning",
     )
+
+
+WEB_URL_KEY = "web_url"  # where `serve --http` last said the web UI is
+
+
+def _url_host(host: str) -> str:
+    """The host to put in a link: localhost for loopback and any-address binds."""
+    from zerostore.mcp.http import is_loopback
+
+    if is_loopback(host) or host in ("0.0.0.0", "::"):
+        return "localhost"
+    return f"[{host}]" if ":" in host else host
+
+
+def _login_link(zs, config_path: Path, base: str) -> str:
+    """A one-time sign-in link, or the plain address when no owner token is saved to sign in with."""
+    from zerostore.web.auth import LoginError, create_login_code, saved_owner_token
+
+    try:
+        saved_owner_token(zs, config_path)
+    except LoginError:
+        return f"{base}/login (sign in with an owner token)"
+    return f"{base}/login?code={create_login_code(zs)}"
+
+
+@app.command()
+def ui(
+    no_open: bool = typer.Option(False, "--no-open", help="Print the sign-in link without opening it."),
+    config: Path = ConfigOption,
+) -> None:
+    """Open the web UI with a fresh one-time sign-in link (`zerostore serve --http` must be running)."""
+    zs = _open(config)
+    if not zs.config.web_ui:
+        _fail("the web UI is off (web_ui: false in zerostore.yaml)")
+    base = (
+        zs.state.get_meta(WEB_URL_KEY)
+        or f"http://{_url_host(zs.config.servers.host)}:{zs.config.servers.port}"
+    )
+    link = _login_link(zs, resolve_config_path(config), base)
+    zs.close()
+    typer.echo(f"Sign in to the web UI: {link}")
+    typer.echo("It works once, for ten minutes, while `zerostore serve --http` is running.")
+    if not no_open and "?code=" in link:
+        import webbrowser
+
+        webbrowser.open(link)
 
 
 def _serve_stdio(zs) -> None:
@@ -522,26 +598,16 @@ def status(
 
 
 def _engine_label(cfg: Config) -> str:
-    ai = cfg.ai
-    if ai.decision_engine == "demo":
-        return "the demo judge (scripted rules for `zerostore demo`)"
-    if ai.decision_engine == "jev" and ai.has_jev:
-        return "Jev"
-    if ai.has_llm:
-        return f"your LLM ({ai.llm_provider})"
-    if ai.has_jev:
-        return "Jev"
-    return "none (every change is applied directly; add an AI key to turn on judgment)"
+    from zerostore.insights import engine_label
+
+    return engine_label(cfg)
 
 
 def _last_sync(zs) -> dict | None:
-    raw = zs.state.get_meta("last_sync")
-    if not raw:
-        return None
-    from zerostore.librarian.ingestion import SyncReport
+    from zerostore.insights import last_sync
 
-    report = SyncReport.from_json(raw)
-    return {"finished_at": report.finished_at, "summary": report.summary(), "ok": report.ok}
+    info = last_sync(zs)
+    return info and {"finished_at": info["finished_at"], "summary": info["summary"], "ok": info["ok"]}
 
 
 @app.command()

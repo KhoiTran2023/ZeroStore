@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Settings · ZeroStore{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="split">
+  <div>
+    <div class="m" style="font-weight:700">{{ config_path }}</div>
+    <div class="cmd">the same file the CLI reads · keys live in secrets.env beside it</div>
+  </div>
+  <div role="group" aria-label="View" style="display:flex">
+    <a class="seg{% if view == 'form' %} on{% endif %}" href="/settings"{% if view == 'form' %} aria-current="page"{% endif %}>form</a>
+    <a class="seg{% if view == 'yaml' %} on{% endif %}" href="/settings?view=yaml"{% if view == 'yaml' %} aria-current="page"{% endif %}>yaml</a>
+  </div>
+</div>
+{% if problem %}<div class="flash warn" role="alert">{{ problem }}</div>{% endif %}
+
+{% if view == "yaml" %}
+<form method="post" action="/settings/yaml" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ yaml_version }}">
+  <label for="yaml" class="sr">zerostore.yaml</label><textarea id="yaml" name="yaml" class="yaml" spellcheck="false">{{ yaml_text }}</textarea>
+  <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">checked before it is written; a bad value is never saved</span></div>
+</form>
+{% else %}
+<section class="box">
+  <h2>servers</h2>
+  <div class="scroll"><table class="nowrap">
+    <thead><tr><th>part</th><th>status</th><th>runs on</th><th>address</th></tr></thead>
+    <tbody>{% for s in servers %}<tr><td>{{ s.name }}</td><td class="ok">● ok</td><td class="muted">{{ s.where }}</td><td>{{ s.address }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <div class="cmd" style="margin-top:8px">everything runs in one program: $ zerostore serve --http · change the vector db and state db in the yaml view</div>
+</section>
+
+<form method="post" action="/settings" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="sections" value="sources,ai,judgment,sync"><input type="hidden" name="version" value="{{ v.version }}">
+  <section class="box stack">
+    <h2 style="margin:0">librarian · the AI that judges what changed</h2>
+    {% include "_ai.html" %}
+  </section>
+  <section class="box stack">
+    {% set c = v.config %}
+    <h2 style="margin:0">thresholds</h2>
+    <label><span>Apply changes on their own at <span class="m">{{ "%.2f"|format(c.review.auto_apply_at) }}</span> or above <span class="hint">lower goes to review · default 0.80</span></span><input type="number" class="f m" name="auto_apply_at" min="0" max="1" step="0.01" value="{{ '%.2f'|format(c.review.auto_apply_at) }}"></label>
+    <label><span>Tell agents "not sure" below <span class="m">{{ "%.2f"|format(c.retrieval.answer_cutoff) }}</span> <span class="hint">default 0.50</span></span><input type="number" class="f m" name="answer_cutoff" min="0" max="1" step="0.01" value="{{ '%.2f'|format(c.retrieval.answer_cutoff) }}"></label>
+    <label><span>Ranking rule</span><input class="f m" type="text" name="rerank_rule" value="{{ c.retrieval.rerank_rule }}"></label>
+    <div class="grid">
+      <label><span>Narrow searches with</span><select class="f" name="narrow_with">{% for e in v.engine_choices %}<option{% if c.retrieval.narrow_with == e %} selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+      <label><span>Rerank with</span><select class="f" name="rerank_with">{% for e in v.rerank_choices %}<option{% if c.retrieval.rerank_with == e %} selected{% endif %}>{{ e }}</option>{% endfor %}</select></label>
+    </div>
+    <label class="check"><input type="checkbox" name="agent_proposals" value="1"{% if c.agent_proposals %} checked{% endif %}> Agents may propose facts (you approve each one)</label>
+  </section>
+  <section class="box stack">
+    <h2 style="margin:0">sync + sources</h2>
+    <label><span>Check for changes <span class="hint">a cron line: {% for k, name in v.schedules.items() %}{{ k }} = {{ name }}{{ "; " if not loop.last }}{% endfor %}</span></span><input class="f m" type="text" name="schedule" value="{{ v.config.sync.schedule }}" list="schedules">
+      <datalist id="schedules">{% for k, name in v.schedules.items() %}<option value="{{ k }}">{{ name }}</option>{% endfor %}</datalist></label>
+    {% include "_sources.html" %}
+  </section>
+  <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">the same file the CLI reads</span></div>
+</form>
+{% endif %}
+
+<section class="box stack">
+  <div class="split"><h2 style="margin:0">tokens</h2><a class="btn small" href="/setup?step=3">Connect to Claude</a></div>
+  <div class="scroll"><table class="nowrap">
+    <thead><tr><th>name</th><th>level</th><th>last seen</th><th><span class="sr">actions</span></th></tr></thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr><td>{{ t.name }}{% if t.id == me %} <span class="muted">(you, here)</span>{% endif %}</td><td>{{ t.level }}</td><td>{{ local_time(t.last_used_at) or "never" }}</td>
+        <td style="text-align:right">{% if t.id != me %}<form method="post" action="/tokens/{{ t.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small" type="submit">revoke</button></form>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  <form method="post" action="/tokens" class="actions" style="align-items:end">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label style="flex:1 1 200px"><span>New token for</span><input class="f" type="text" name="name" placeholder="cursor-laptop" required></label>
+    <label><span>Access</span><select class="f" name="level"><option value="default">default</option><option value="confidential">confidential</option><option value="owner">owner</option></select></label>
+    <button class="btn" type="submit">New token</button>
+  </form>
+  <span class="cmd">default never sees confidential facts · confidential sees everything · owner can also change settings and review</span>
+</section>
+{% endblock %}
