@@ -68,14 +68,20 @@ class TokenStore:
     def __init__(self, state: StateDB):
         self.state = state
 
-    def create(self, name: str, level: AccessLevel | str) -> tuple[str, TokenInfo]:
-        """Create a token. Returns (raw token, info); the raw token is never stored."""
+    def create(self, name: str, level: AccessLevel | str, *, raw: str | None = None) -> tuple[str, TokenInfo]:
+        """Create a token. Returns (raw token, info); the raw token is never stored.
+
+        `raw` re-registers a token made earlier (the demo keeps its agents' tokens
+        across resets); it must look like one this method generates.
+        """
         level = AccessLevel(level)
         name = name.strip()
         if not name:
             raise ValueError("a token needs a name, e.g. cursor-laptop")
+        if raw is not None and not (raw.startswith(TOKEN_PREFIX) and len(raw) >= 40):
+            raise ValueError("not a ZeroStore token")
         token_id = secrets.token_hex(4)
-        raw = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+        raw = raw or f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
         now = utcnow()
         with self.state.tx() as cur:
             cur.execute(

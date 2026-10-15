@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict, dataclass, field
+from datetime import timedelta
 from typing import Any
 
 import lancedb
@@ -22,6 +23,10 @@ import pyarrow as pa
 from zerostore.store.embeddings import Embedder
 
 TABLE = "chunks"
+# How stale a read may be. Every agent runs its own `zerostore serve` process, and a sync
+# in any other process must reach all of them, so each reads the latest table version
+# at most this long after it was written.
+READ_FRESHNESS = timedelta(seconds=1)
 
 
 @dataclass
@@ -55,7 +60,7 @@ class FactStore:
     def __init__(self, uri: str, embedder: Embedder):
         self.uri = uri
         self.embedder = embedder
-        self._db = lancedb.connect(uri)
+        self._db = lancedb.connect(uri, read_consistency_interval=READ_FRESHNESS)
         self._table = self._open_or_create()
 
     def _schema(self) -> pa.Schema:

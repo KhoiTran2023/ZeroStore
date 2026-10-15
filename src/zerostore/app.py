@@ -29,6 +29,8 @@ def planned_embedder(config: Config) -> str:
     hashing embedder as a last resort.
     """
     ai = config.ai
+    if ai.embeddings == "basic":
+        return "hashing-256"
     if ai.embeddings == "provider" and ai.has_llm and ai.llm_provider in EMBEDDING_MODELS:
         return f"{ai.llm_provider}:{EMBEDDING_MODELS[ai.llm_provider]}"
     if importlib.util.find_spec("fastembed") is not None:
@@ -70,7 +72,7 @@ def make_embedder(config: Config, quiet: bool = False, built_with: str | None = 
                 built_with,
                 wanted,
             )
-    if name == "hashing-256" and not quiet:
+    if name == "hashing-256" and config.ai.embeddings != "basic" and not quiet:
         log.warning(
             "No embedding model is set up, so search falls back to word matching. "
             "For better results add an AI key, or: pip install 'zerostore[local]'"

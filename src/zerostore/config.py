@@ -99,7 +99,7 @@ DEFAULT_TOPICS = [
 
 
 class AISettings(_Section):
-    decision_engine: Literal["jev", "llm"] = "jev"
+    decision_engine: Literal["jev", "llm", "demo"] = "jev"  # demo: the scripted judge of `zerostore demo`
     jev_api_key: str | None = None
     jev_model: str = "jev-latest"
     jev_base_url: str = "https://api.typesafe.ai"  # or a Jev-compatible endpoint such as OpenRouter
@@ -107,7 +107,8 @@ class AISettings(_Section):
     llm_model: str = "mid-tier"  # "mid-tier" picks the provider's balanced model; any model name works
     llm_api_key: str | None = None
     llm_base_url: str | None = None  # only for a self-hosted or proxied endpoint
-    embeddings: Literal["provider", "local"] = "provider"
+    # provider, local (the fastembed model), or basic (word matching only, no model; used by the demo)
+    embeddings: Literal["provider", "local", "basic"] = "provider"
 
     @field_validator("llm_provider")
     @classmethod
@@ -197,10 +198,14 @@ class Config(_Section):
     decisions_file: str | None = None  # default: ~/.zerostore/decisions.md
     web_ui: bool = True
     servers: ServerSettings = Field(default_factory=ServerSettings)
+    # Set only by `zerostore demo`: every source is read from this folder of made-up files.
+    demo: str | None = None
 
     @model_validator(mode="after")
     def _engines_have_keys(self) -> Config:
         r, ai = self.retrieval, self.ai
+        if ai.decision_engine == "demo" and not self.demo:
+            raise ValueError("ai.decision_engine: demo is only for `zerostore demo`; use jev or llm")
         if "jev" in (r.narrow_with, r.rerank_with) and not ai.has_jev:
             raise ValueError("retrieval uses jev, but ai.jev_api_key is not set")
         if "llm" in (r.narrow_with, r.rerank_with) and not ai.has_llm:
@@ -209,6 +214,9 @@ class Config(_Section):
 
     def decisions_path(self) -> Path:
         return Path(self.decisions_file).expanduser() if self.decisions_file else home_dir() / "decisions.md"
+
+    def demo_path(self) -> Path | None:
+        return Path(self.demo).expanduser() if self.demo else None
 
 
 def expand_env(value: Any) -> Any:

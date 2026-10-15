@@ -85,9 +85,13 @@ class ChangePlan:
         """Every chunk was judged noise: nothing to serve from this document."""
         return not self.chunks and self.dropped > 0
 
+    def replaces(self) -> list[str]:
+        """Titles of the other documents whose facts this change hides."""
+        return sorted({s.title for s in self.supersedes if s.by_doc == self.doc_id})
+
     def note(self) -> str:
         parts = []
-        hidden = sorted({s.title for s in self.supersedes if s.by_doc == self.doc_id})
+        hidden = self.replaces()
         if hidden:
             parts.append("replaces facts in " + ", ".join(hidden))
         older = sorted({s.by_title for s in self.supersedes if s.doc_id == self.doc_id})

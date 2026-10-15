@@ -1,7 +1,7 @@
 """The `zerostore` command.
 
-Commands so far: init, serve, sync, review, reindex, token, status and
-connect. Demo, report and service arrive with later stages.
+Commands so far: init, serve, sync, review, reindex, token, status, connect
+and demo. Report and service arrive with later stages.
 
 Admin commands (init, token, status) work directly on this machine's state
 file: whoever can read ~/.zerostore already holds the owner token, and the
@@ -38,6 +38,11 @@ review_app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(review_app, name="review")
+demo_app = typer.Typer(
+    help="Try ZeroStore on Pebble & Co., a made-up company: no accounts, keys or network needed.",
+    invoke_without_command=True,
+)
+app.add_typer(demo_app, name="demo")
 
 OWNER_TOKEN_FILE = "owner-token"
 
@@ -518,6 +523,8 @@ def status(
 
 def _engine_label(cfg: Config) -> str:
     ai = cfg.ai
+    if ai.decision_engine == "demo":
+        return "the demo judge (scripted rules for `zerostore demo`)"
     if ai.decision_engine == "jev" and ai.has_jev:
         return "Jev"
     if ai.has_llm:
@@ -565,6 +572,101 @@ def connect(
             raise typer.Exit()
     rules.add_rule(path)
     typer.echo(f"Added the ZeroStore line to {path}.")
+
+
+DemoHome = typer.Option(None, "--home", help="Where the demo keeps its files (default ~/.zerostore/demo).")
+
+
+def _demo(home: Path | None, ctx: typer.Context | None = None):
+    from zerostore.demo import Demo
+
+    # `zerostore demo --home X start` and `zerostore demo start --home X` both work.
+    return Demo(home or (ctx.obj if ctx and isinstance(ctx.obj, Path) else None))
+
+
+def _demo_run(action) -> None:
+    from zerostore.demo import DemoError
+    from zerostore.librarian.ingestion import SyncBusy
+
+    try:
+        action()
+    except (DemoError, ConfigError, SyncBusy) as exc:
+        _fail(str(exc))
+    except OSError as exc:  # e.g. a demo file still open in another program
+        _fail(f"the demo couldn't change its files: {exc}")
+
+
+@demo_app.callback()
+def demo_play(
+    ctx: typer.Context,
+    pause: float = typer.Option(1.0, help="Seconds between steps; 0 plays it straight through."),
+    home: Path = DemoHome,
+) -> None:
+    """Play the whole story: two agents, the CEO changes the price, every agent follows."""
+    if ctx.invoked_subcommand is not None:
+        ctx.obj = home
+        return
+    from zerostore.demo.story import Teller, play
+
+    _demo_run(lambda: play(_demo(home), Teller(max(pause, 0.0))))
+
+
+@demo_app.command("start")
+def demo_start(ctx: typer.Context, home: Path = DemoHome) -> None:
+    """Load Pebble & Co. as it was before the price change, to try with your own agents."""
+    from zerostore.demo.story import Teller, start
+
+    _demo_run(lambda: start(_demo(home, ctx), Teller(0)))
+
+
+@demo_app.command("change-price")
+def demo_change_price(ctx: typer.Context, home: Path = DemoHome) -> None:
+    """The CEO edits Pricing 2026: the Pro plan goes from $20 to $29. Sync to see what happens."""
+    from zerostore.demo import NEW_PRICE, OLD_PRICE
+
+    demo = _demo(home, ctx)
+
+    def go() -> None:
+        if not demo.change_price():
+            typer.echo(f"The CEO already changed the price. `{demo.command('start')}` resets the company.")
+            return
+        typer.echo("The CEO edited Pricing 2026:")
+        typer.secho(f"  - {OLD_PRICE}", fg=typer.colors.RED)
+        typer.secho(f"  + {NEW_PRICE}", fg=typer.colors.GREEN)
+        typer.echo(f'Now sync: zerostore sync -c "{demo.config_path}"')
+
+    _demo_run(go)
+
+
+@demo_app.command("add-note")
+def demo_add_note(ctx: typer.Context, home: Path = DemoHome) -> None:
+    """Maya asks in Linear whether to drop the free tier. Sync to see it wait for review."""
+    from zerostore.demo import NOTE_TEXT
+
+    demo = _demo(home, ctx)
+
+    def go() -> None:
+        if not demo.add_note():
+            typer.echo(f"The note is already there. `{demo.command('start')}` resets the company.")
+            return
+        typer.echo(f'Maya added PEB-48 in Linear: "{NOTE_TEXT}"')
+        typer.echo(f'Now sync: zerostore sync -c "{demo.config_path}"')
+
+    _demo_run(go)
+
+
+@demo_app.command("remove")
+def demo_remove(ctx: typer.Context, home: Path = DemoHome) -> None:
+    """Delete the demo company and everything the demo stored."""
+    demo = _demo(home, ctx)
+
+    def go() -> None:
+        if demo.remove():
+            typer.echo(f"Removed the demo from {demo.home}.")
+        else:
+            typer.echo("There is no demo to remove.")
+
+    _demo_run(go)
 
 
 def main() -> None:

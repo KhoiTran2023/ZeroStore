@@ -57,6 +57,7 @@ class DocChange:
     confidence: float | None = None
     engine: str | None = None
     note: str = ""
+    replaces: list[str] = field(default_factory=list)  # documents whose facts this change hid
 
 
 @dataclass
@@ -143,6 +144,10 @@ def make_connector(name: str, config: Config) -> Connector:
         from zerostore.connectors.decisions import DecisionsConnector
 
         return DecisionsConnector(config.decisions_path())
+    if config.demo:
+        from zerostore.connectors.demo import DemoConnector
+
+        return DemoConnector.from_config(name, config)
     if name == "google_drive":
         from zerostore.connectors.gdrive import GoogleDriveConnector
 
@@ -368,6 +373,7 @@ class Ingestor:
                     plan.confidence,
                     plan.engine,
                     plan.note(),
+                    plan.replaces(),
                 )
             )
             if plan.action == "added":

@@ -3,6 +3,7 @@
 - The librarian's judgment (keep, topics, compare, deletes): Jev when
   `ai.decision_engine` is jev and a Jev key is set, otherwise your LLM when one
   is set up, otherwise none (every change is applied directly, as before).
+  `decision_engine: demo` is the scripted judge `zerostore demo` uses.
 - Narrowing (`retrieval.narrow_with`) and reranking (`retrieval.rerank_with`):
   `auto` follows the judgment engine; reranking falls back to the local
   reranker when no AI is set up and `zerostore[local]` is installed.
@@ -44,6 +45,12 @@ def make_llm(config: Config) -> DecisionEngine:
     return LLMEngine(ai.llm_provider or "", ai.llm_model, ai.llm_api_key, base_url=ai.llm_base_url)
 
 
+def make_demo(config: Config) -> DecisionEngine:
+    from zerostore.decisions.demo import DemoEngine
+
+    return DemoEngine(config.retrieval.topics)
+
+
 def make_local() -> DecisionEngine | None:
     from zerostore.decisions.local import LocalReranker
 
@@ -63,11 +70,15 @@ def build_engines(config: Config) -> Engines:
     def get(kind: str) -> DecisionEngine | None:
         if kind not in cache:
             cache[kind] = (
-                {"jev": make_jev, "llm": make_llm}[kind](config) if kind != "local" else make_local()
+                {"jev": make_jev, "llm": make_llm, "demo": make_demo}[kind](config)
+                if kind != "local"
+                else make_local()
             )
         return cache[kind]
 
-    if ai.decision_engine == "jev" and ai.has_jev:
+    if ai.decision_engine == "demo":
+        default = "demo"
+    elif ai.decision_engine == "jev" and ai.has_jev:
         default = "jev"
     elif ai.has_llm:
         default = "llm"
@@ -92,6 +103,8 @@ def build_engines(config: Config) -> Engines:
 def build_judge(config: Config) -> DecisionEngine | None:
     """Only the judgment engine (for syncs), without starting any reranker."""
     ai = config.ai
+    if ai.decision_engine == "demo":
+        return make_demo(config)
     if ai.decision_engine == "jev" and ai.has_jev:
         return make_jev(config)
     if ai.has_llm:
