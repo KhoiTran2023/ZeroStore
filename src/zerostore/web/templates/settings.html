@@ -16,7 +16,7 @@
 
 {% if view == "yaml" %}
 <form method="post" action="/settings/yaml" class="stack">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ yaml_version }}">
   <label for="yaml" class="sr">zerostore.yaml</label><textarea id="yaml" name="yaml" class="yaml" spellcheck="false">{{ yaml_text }}</textarea>
   <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">checked before it is written; a bad value is never saved</span></div>
 </form>
@@ -32,7 +32,7 @@
 
 <form method="post" action="/settings" class="stack">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <input type="hidden" name="sections" value="sources,ai,judgment,sync">
+  <input type="hidden" name="sections" value="sources,ai,judgment,sync"><input type="hidden" name="version" value="{{ v.version }}">
   <section class="box stack">
     <h2 style="margin:0">librarian · the AI that judges what changed</h2>
     {% include "_ai.html" %}
@@ -55,7 +55,7 @@
       <datalist id="schedules">{% for k, name in v.schedules.items() %}<option value="{{ k }}">{{ name }}</option>{% endfor %}</datalist></label>
     {% include "_sources.html" %}
   </section>
-  <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">$ zerostore config: same file, so the CLI sees it too</span></div>
+  <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">the same file the CLI reads</span></div>
 </form>
 {% endif %}
 

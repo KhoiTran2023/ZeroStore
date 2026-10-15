@@ -144,7 +144,39 @@ class Sessions:
 
 
 def csrf_ok(session: Session, sent: str | None) -> bool:
-    return bool(sent) and hmac.compare_digest(session.csrf, sent)
+    return bool(sent) and hmac.compare_digest(session.csrf.encode(), sent.encode())
+
+
+TOKEN_PROBLEMS = ("token was revoked", "token is not recognized", "no ZeroStore token")
+
+
+def is_token_problem(message: str) -> bool:
+    return any(p in message for p in TOKEN_PROBLEMS)
+
+
+class FailedSignIns:
+    """At most `limit` refused sign-ins per address per minute."""
+
+    def __init__(self, limit: int = 10, window: float = 60.0):
+        self.limit, self.window = limit, window
+        self._lock = threading.Lock()
+        self._tries: dict[str, list[float]] = {}
+
+    def _recent(self, who: str, now: float) -> list[float]:
+        tries = [t for t in self._tries.get(who, []) if now - t < self.window]
+        self._tries[who] = tries
+        return tries
+
+    def blocked(self, who: str) -> bool:
+        with self._lock:
+            return len(self._recent(who, time.time())) >= self.limit
+
+    def add(self, who: str) -> None:
+        with self._lock:
+            now = time.time()
+            self._recent(who, now).append(now)
+            if len(self._tries) > 10_000:  # forget the oldest addresses rather than grow forever
+                self._tries.pop(next(iter(self._tries)))
 
 
 LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}

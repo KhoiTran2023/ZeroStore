@@ -199,15 +199,19 @@ def serve(
     ),
     schedule: bool = typer.Option(True, "--schedule/--no-schedule", help="Run timed syncs in this process."),
     open_browser: bool = typer.Option(False, "--open", help="With --http, open the web UI in your browser."),
+    public_url: str = typer.Option(
+        None, help="The address people and agents use, e.g. https://zs.example.com (default: this machine)."
+    ),
     config: Path = ConfigOption,
 ) -> None:
     """Run the MCP server (stdio for one agent, or HTTP for many, with the web UI), plus timed syncs."""
     zs = _open(config, quiet=False)
-    if schedule and _has_sources(zs.config):
+    # Over HTTP the scheduler starts even with no sources yet: the web UI can add them while it runs.
+    if schedule and (http or _has_sources(zs.config)):
         from zerostore.librarian.ingestion import Ingestor
         from zerostore.scheduler.runner import SyncScheduler
 
-        SyncScheduler(Ingestor(zs), zs.config.sync.schedule).start()
+        SyncScheduler(Ingestor(zs), None, renew=lambda: Ingestor(zs)).start()
     if not http:
         _serve_stdio(zs)
         return
@@ -227,25 +231,36 @@ def serve(
     import uvicorn
 
     scheme = "https" if tls_cert else "http"
-    base = f"{scheme}://{_url_host(host)}:{port}"
+    base = (public_url or f"{scheme}://{_url_host(host)}:{port}").rstrip("/")
     typer.echo(f"ZeroStore MCP server on {base}/mcp", err=True)
     config_path = resolve_config_path(config)
     if zs.config.web_ui:
-        link = _login_link(zs, config_path, base)
-        typer.echo(f"Web UI: {link}", err=True)
+        zs.state.set_meta(WEB_URL_KEY, base)  # for `zerostore ui`
         if open_browser:
             import threading
             import webbrowser
 
-            threading.Timer(1.0, webbrowser.open, args=(link,)).start()
+            # A sign-in code is made only when asked for, so none sits in service logs.
+            threading.Timer(1.0, webbrowser.open, args=(_login_link(zs, config_path, base),)).start()
+        typer.echo(f"Web UI: {base}  (`zerostore ui` opens it signed in)", err=True)
     uvicorn.run(
-        create_http_app(zs, host=host, config_path=config_path, mcp_url=f"{base}/mcp"),
+        create_http_app(
+            zs,
+            host=host,
+            config_path=config_path,
+            mcp_url=f"{base}/mcp",
+            behind_proxy=behind_https_proxy,
+            scheduled=schedule,
+        ),
         host=host,
         port=port,
         ssl_certfile=str(tls_cert) if tls_cert else None,
         ssl_keyfile=str(tls_key) if tls_key else None,
         log_level="warning",
     )
+
+
+WEB_URL_KEY = "web_url"  # where `serve --http` last said the web UI is
 
 
 def _url_host(host: str) -> str:
@@ -277,7 +292,10 @@ def ui(
     zs = _open(config)
     if not zs.config.web_ui:
         _fail("the web UI is off (web_ui: false in zerostore.yaml)")
-    base = f"http://{_url_host(zs.config.servers.host)}:{zs.config.servers.port}"
+    base = (
+        zs.state.get_meta(WEB_URL_KEY)
+        or f"http://{_url_host(zs.config.servers.host)}:{zs.config.servers.port}"
+    )
     link = _login_link(zs, resolve_config_path(config), base)
     zs.close()
     typer.echo(f"Sign in to the web UI: {link}")

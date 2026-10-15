@@ -78,14 +78,16 @@ def test_htmx_requests_are_told_to_go_to_sign_in(web):
 def test_login_link_works_once(web, demo):
     d, zs = demo
     code = auth.create_login_code(zs)
-    response = web.get(f"/login?code={code}", follow_redirects=False)
+    page = web.get(f"/login?code={code}")  # opening the link (or a preview bot) doesn't use it
+    assert f'name="code" value="{code}"' in page.text
+    response = web.post("/login", data={"code": code}, follow_redirects=False)
     assert response.status_code == 303
     cookie = response.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie
     assert web.get("/status").status_code == 200
 
     fresh = TestClient(web.app, base_url=BASE)
-    again = fresh.get(f"/login?code={code}", follow_redirects=False)
+    again = fresh.post("/login", data={"code": code}, follow_redirects=False)
     assert again.status_code == 200
     assert "already used" in again.text
 
@@ -105,7 +107,7 @@ def test_login_link_needs_the_saved_owner_token(web, demo):
     d, zs = demo
     (d.home / "owner-token").unlink()
     code = auth.create_login_code(zs)
-    response = web.get(f"/login?code={code}")
+    response = web.post("/login", data={"code": code})
     assert "no working owner token" in response.text
 
 
@@ -273,7 +275,6 @@ def test_settings_form_saves_and_keeps_comments(web, demo):
     assert saved.retrieval.answer_cutoff == 0.4
     assert saved.sync.schedule == "0 * * * *"
     assert zs.config.review.auto_apply_at == 0.9  # the running server uses it for syncs
-    assert stat.S_IMODE(os.stat(d.config_path).st_mode) == 0o600
 
 
 def test_bad_settings_are_not_saved(web, demo):
@@ -292,29 +293,29 @@ def test_keys_go_to_secrets_env_and_are_never_shown(web, demo):
     form = {"csrf": csrf(web), "sections": "ai", "llm_provider": "anthropic", "llm_model": "mid-tier"}
     form.update(llm_key="sk-test-secret-123", decision_engine="demo")
     web.post("/settings", data=form)
-    assert "${LLM_API_KEY}" in d.config_path.read_text()
+    assert "${ZEROSTORE_LLM_API_KEY}" in d.config_path.read_text()
     assert "sk-test-secret-123" not in d.config_path.read_text()
     secrets_path = d.config_path.parent / "secrets.env"
-    assert read_secrets(secrets_path)["LLM_API_KEY"] == "sk-test-secret-123"
+    assert read_secrets(secrets_path)["ZEROSTORE_LLM_API_KEY"] == "sk-test-secret-123"
     assert stat.S_IMODE(os.stat(secrets_path).st_mode) == 0o600
     assert load_config(d.config_path).ai.llm_api_key == "sk-test-secret-123"
     page = web.get("/settings").text
     assert "sk-test-secret-123" not in page
-    assert "set (LLM_API_KEY)" in page
+    assert "set (ZEROSTORE_LLM_API_KEY)" in page
 
     # A blank key field keeps the key; a new one replaces it in place.
     web.post("/settings", data={**form, "csrf": csrf(web), "llm_key": ""})
     assert load_config(d.config_path).ai.llm_api_key == "sk-test-secret-123"
     web.post("/settings", data={**form, "csrf": csrf(web), "llm_key": "sk-new"})
-    assert secrets_path.read_text().count("LLM_API_KEY=") == 1
+    assert secrets_path.read_text().count("ZEROSTORE_LLM_API_KEY=") == 1
     assert load_config(d.config_path).ai.llm_api_key == "sk-new"
 
 
-def test_environment_wins_over_secrets_env(demo, monkeypatch):
+def test_a_typed_key_is_not_overridden_by_a_shell_variable(demo, monkeypatch):
     d, _ = demo
-    apply_form(d.config_path, {"sections": "ai", "llm_provider": "openai", "llm_key": "from-file"})
-    monkeypatch.setenv("LLM_API_KEY", "from-env")
-    assert load_config(d.config_path).ai.llm_api_key == "from-env"
+    monkeypatch.setenv("LLM_API_KEY", "from-the-shell")
+    apply_form(d.config_path, {"sections": "ai", "llm_provider": "openai", "llm_key": "typed"})
+    assert load_config(d.config_path).ai.llm_api_key == "typed"
 
 
 def test_sources_form(demo):
@@ -353,7 +354,7 @@ def test_form_values_never_hold_keys(demo):
     d, _ = demo
     apply_form(d.config_path, {"sections": "ai", "llm_provider": "openai", "llm_key": "sk-abc"})
     values = form_values(d.config_path)
-    assert values["llm_key"] == "set (LLM_API_KEY)"
+    assert values["llm_key"] == "set (ZEROSTORE_LLM_API_KEY)"
     assert values["jev_key"] == "not set"
 
 
@@ -521,3 +522,129 @@ def test_demo_keeps_its_owner_token_across_resets(demo):
     assert d.owner_token() == first
     assert stat.S_IMODE(os.stat(d.home / "owner-token").st_mode) == 0o600
     again.close()
+
+
+# What the second review found -------------------------------------------------------------
+
+
+def test_a_revoked_owner_token_signs_out(web, demo):
+    d, zs = demo
+    sign_in(web, d)
+    owner = zs.tokens.verify(d.owner_token())
+    zs.tokens.revoke(owner.id)
+    response = web.get("/status", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_behind_a_proxy(demo):
+    d, zs = demo
+    app = create_web_app(zs, d.config_path, bound_host="127.0.0.1", behind_proxy=True)
+    client = TestClient(app, base_url="https://zs.example.com")
+    assert client.get("/login").status_code == 200  # the public host name is fine
+    headers = {
+        "Origin": "https://zs.example.com",
+        "Host": "127.0.0.1:8765",
+        "X-Forwarded-Host": "zs.example.com",
+    }
+    response = client.post("/login", data={"token": d.owner_token()}, headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+    assert "secure" in response.headers["set-cookie"].lower()
+    other = {**headers, "Origin": "https://evil.example"}
+    assert client.post("/login", data={"token": "x"}, headers=other).status_code == 403
+
+
+def test_refused_sign_ins_are_limited(web):
+    for _ in range(10):
+        web.post("/login", data={"token": "zs_" + "x" * 40})
+    assert "Too many tries" in web.post("/login", data={"token": "zs_" + "x" * 40}).text
+
+
+def test_odd_form_tokens_are_refused_not_crashed(web, demo):
+    d, _ = demo
+    sign_in(web, d)
+    assert web.post("/sync", data={"csrf": "é"}).status_code == 403
+
+
+def test_sign_in_page_hides_the_config_path(web, demo):
+    d, _ = demo
+    assert str(d.config_path) not in web.get("/login").text
+
+
+def test_saving_keeps_symlinks_and_permissions(demo, tmp_path):
+    d, _ = demo
+    real = tmp_path / "dotfiles" / "zerostore.yaml"
+    real.parent.mkdir()
+    real.write_text(d.config_path.read_text())
+    os.chmod(real, 0o640)
+    link = tmp_path / "linked" / "zerostore.yaml"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    apply_form(link, {"sections": "sync", "schedule": "0 * * * *"})
+    assert link.is_symlink()
+    assert "0 * * * *" in real.read_text()
+    assert stat.S_IMODE(os.stat(real).st_mode) == 0o640
+
+
+def test_yaml_view_line_endings_and_edits_made_elsewhere(demo):
+    d, _ = demo
+    text = d.config_path.read_text()
+    version = form_values(d.config_path)["version"]
+    save_text(d.config_path, text.replace("\n", "\r\n"), version)
+    assert "\r" not in d.config_path.read_text()
+    d.config_path.write_text(text + "# edited in another tab\n")
+    with pytest.raises(SettingsError, match="changed since this page was opened"):
+        apply_form(d.config_path, {"sections": "sync", "schedule": "0 * * * *", "version": version})
+
+
+def test_names_yaml_would_misread_are_quoted(demo):
+    d, _ = demo
+    config = apply_form(
+        d.config_path, {"sections": "sources", "linear_on": "1", "linear_teams": "On, Yes, 1.0, Eng"}
+    )
+    assert config.sources.linear.teams == ["On", "Yes", "1.0", "Eng"]
+
+
+def test_scheduled_syncs_follow_saved_settings(demo):
+    from datetime import datetime, timezone
+
+    from zerostore.scheduler.runner import ANCHOR_KEY, SyncScheduler
+
+    d, zs = demo
+    zs.state.set_meta(ANCHOR_KEY, "2026-10-01T00:00:00+00:00")
+    built = []
+
+    def renew():
+        built.append(1)
+        return Ingestor(zs)
+
+    clock = lambda: datetime(2026, 10, 2, 7, 0, tzinfo=timezone.utc)  # noqa: E731
+    scheduler = SyncScheduler(Ingestor(zs), None, clock=clock, tz=timezone.utc, renew=renew)
+    assert scheduler.schedule == zs.config.sync.schedule
+    zs.config = apply_form(d.config_path, {"sections": "sync", "schedule": "0 5 * * *"})
+    assert scheduler.schedule == "0 5 * * *"
+    assert scheduler.run_if_due()
+    assert built == [1]  # a fresh Ingestor, so a judge added since start is used
+
+
+def test_scheduler_waits_while_there_are_no_sources(tmp_path, zs):
+    from datetime import datetime, timezone
+
+    from zerostore.scheduler.runner import ANCHOR_KEY, SyncScheduler
+
+    zs.state.set_meta(ANCHOR_KEY, "2026-10-01T00:00:00+00:00")
+    clock = lambda: datetime(2026, 10, 2, 7, 0, tzinfo=timezone.utc)  # noqa: E731
+    scheduler = SyncScheduler(Ingestor(zs), None, clock=clock, tz=timezone.utc)
+    assert not scheduler.run_if_due()
+    assert zs.state.get_meta(ANCHOR_KEY).startswith("2026-10-02")
+
+
+def test_zerostore_ui_uses_the_address_serve_announced(demo):
+    from typer.testing import CliRunner
+
+    from zerostore.cli import WEB_URL_KEY, app
+
+    d, zs = demo
+    zs.state.set_meta(WEB_URL_KEY, "https://zs.example.com")
+    result = CliRunner().invoke(app, ["ui", "--no-open", "-c", str(d.config_path)])
+    assert "https://zs.example.com/login?code=" in result.output

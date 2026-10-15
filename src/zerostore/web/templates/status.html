@@ -15,7 +15,7 @@
     </div>
     <div class="cmd">
       {% if last %}last sync {{ local_time(last.finished_at) }}{% if last.judged %} · judged {{ last.judged }} in {{ last.judge_seconds }}s{% endif %} · {% endif %}
-      {% if status.next_sync %}next {{ local_time(status.next_sync, "%m-%d %H:%M") }}{% endif %}
+      {% if not scheduled %}timed syncs are off in this server{% elif status.next_sync %}next {{ local_time(status.next_sync, "%m-%d %H:%M") }}{% endif %}
       · {{ status.documents }} documents, {{ status.chunks }} facts
     </div>
     {% if sync_result and not syncing %}<div class="cmd {{ 'ok' if sync_result.ok else 'warn' }}">{{ sync_result.text }}</div>{% endif %}

@@ -26,7 +26,14 @@ from zerostore.app import ZeroStore
 from zerostore.config import CONFIG_FILENAME, home_dir
 from zerostore.web import auth, charts
 from zerostore.web.owner import OwnerClient, OwnerError
-from zerostore.web.settings import SettingsError, apply_form, form_values, read_text, save_text
+from zerostore.web.settings import (
+    SettingsError,
+    apply_form,
+    form_values,
+    read_text,
+    save_text,
+    version_of,
+)
 
 log = logging.getLogger("zerostore.web")
 
@@ -93,13 +100,13 @@ class SyncRunner:
         threading.Thread(target=self._run, args=(token,), name="zerostore-web-sync", daemon=True).start()
         return True
 
-    def take_result(self) -> dict[str, Any] | None:
-        """The finished sync's outcome, once: the next page view shows the live numbers instead."""
+    def snapshot(self) -> dict[str, Any]:
+        """Whether a sync runs, and the finished one's outcome, shown once."""
         with self._lock:
             if self.running:
-                return None
+                return {"syncing": True, "sync_result": None}
             result, self.result = self.result, None
-            return result
+            return {"syncing": False, "sync_result": result}
 
     def _run(self, token: str) -> None:
         try:
@@ -200,7 +207,15 @@ def create_web_app(
     *,
     bound_host: str = "127.0.0.1",
     mcp_url: str | None = None,
+    behind_proxy: bool = False,
+    scheduled: bool = True,
 ) -> FastAPI:
+    """The web UI for one ZeroStore.
+
+    `behind_proxy`: a reverse proxy in front forwards requests, so the Host header
+    may be the public name and the public origin comes from X-Forwarded-Host.
+    `scheduled`: this process runs timed syncs (shown on the status page).
+    """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals.update(
@@ -211,24 +226,36 @@ def create_web_app(
     sessions = auth.Sessions()
     owner = OwnerClient(zs)
     syncer = SyncRunner(owner)
-    loopback_only = _is_loopback(bound_host)
+    loopback_only = _is_loopback(bound_host) and not behind_proxy
+    failures = auth.FailedSignIns()
     app.state.sessions = sessions
     app.state.owner = owner
     app.state.syncer = syncer
 
     async def call(token: str, tool: str, **args: Any) -> dict[str, Any]:
-        return await anyio.to_thread.run_sync(functools.partial(owner.call, token, tool, **args))
+        try:
+            return await anyio.to_thread.run_sync(functools.partial(owner.call, token, tool, **args))
+        except OwnerError as exc:
+            if auth.is_token_problem(str(exc)):  # revoked or deleted while signed in
+                raise SignIn() from None
+            raise
+
+    def public_host(request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-host") if behind_proxy else None
+        return (forwarded or request.headers.get("host", "")).split(",")[0].strip()
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
         host = auth.host_name(request.headers.get("host", ""))
         if loopback_only and host not in auth.LOOPBACK_NAMES:
             return Response(
-                "This address isn't allowed. Open ZeroStore at http://localhost.", status_code=400
+                "This address isn't allowed. Open ZeroStore at http://localhost, or start it with "
+                "--behind-https-proxy if a proxy forwards to it.",
+                status_code=400,
             )
         if request.method == "POST":
             origin = request.headers.get("origin")
-            if origin and origin != "null" and urlparse(origin).netloc != request.headers.get("host"):
+            if origin and origin != "null" and urlparse(origin).netloc != public_host(request):
                 return Response("Cross-site requests are refused.", status_code=403)
         response = await call_next(request)
         response.headers.setdefault("X-Frame-Options", "DENY")
@@ -244,6 +271,7 @@ def create_web_app(
 
     @app.exception_handler(SignIn)
     async def _sign_in(request: Request, exc: SignIn):
+        sessions.end(request.cookies.get(COOKIE))
         if request.headers.get("hx-request"):
             return Response(status_code=204, headers={"HX-Redirect": "/login"})
         return RedirectResponse("/login", status_code=303)
@@ -296,23 +324,29 @@ def create_web_app(
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request, code: str | None = None):
-        error = None
-        if code:
-            try:
-                await anyio.to_thread.run_sync(auth.redeem_login_code, zs, code)
-                token = await anyio.to_thread.run_sync(auth.saved_owner_token, zs, config_path)
-                return _signed_in(request, sessions, token)
-            except auth.LoginError as exc:
-                error = str(exc)
-        return await render(request, "login.html", None, "login", error=error)
+        # A link only shows a button: the code is used up by the POST, so link previews
+        # and prefetching can't spend it.
+        return await render(request, "login.html", None, "login", code=code or "")
 
     @app.post("/login")
     async def login(request: Request):
+        who = request.client.host if request.client else "?"
+        if failures.blocked(who):
+            return await render(
+                request, "login.html", None, "login", error="Too many tries. Wait a minute and try again."
+            )
         form = await request.form()
+        code = str(form.get("code") or "").strip()
         token = str(form.get("token") or "").strip()
         try:
-            await anyio.to_thread.run_sync(auth.check_owner, zs, token)
+            if code:
+                await anyio.to_thread.run_sync(auth.redeem_login_code, zs, code)
+                token = await anyio.to_thread.run_sync(auth.saved_owner_token, zs, config_path)
+            else:
+                await anyio.to_thread.run_sync(auth.check_owner, zs, token)
         except auth.LoginError as exc:
+            failures.add(who)
+            log.warning("web UI sign-in refused from %s: %s", who, exc)
             return await render(request, "login.html", None, "login", error=str(exc))
         return _signed_in(request, sessions, token)
 
@@ -375,8 +409,8 @@ def create_web_app(
             review=[review_view(i, cfg.review.auto_apply_at) for i in review[:5]],
             recent=recent,
             figures=figures,
-            syncing=syncer.running,
-            sync_result=syncer.take_result(),
+            **syncer.snapshot(),
+            scheduled=scheduled,
         )
 
     @app.post("/sync")
@@ -408,8 +442,12 @@ def create_web_app(
         session, form = await posted(request)
         approve = form.get("decision") == "approve"
         args: dict[str, Any] = {"id": item_id, "approve": approve}
-        fact = (form.get("fact") or "").strip()
-        if approve and fact and fact != (form.get("original_fact") or "").strip():
+
+        def clean(text: str | None) -> str:
+            return (text or "").replace("\r\n", "\n").strip()  # browsers send CRLF from a textarea
+
+        fact = clean(form.get("fact"))
+        if approve and fact and fact != clean(form.get("original_fact")):
             args["fact"] = fact
         try:
             result = await call(session.token, "review_decide", **args)
@@ -453,6 +491,7 @@ def create_web_app(
             v=values,
             problem=problem,
             yaml_text=text,
+            yaml_version=version_of(text),
             tokens=tokens,
             me=caller.id,
             servers=_servers(zs, bound_host, mcp_url),
@@ -467,7 +506,9 @@ def create_web_app(
     async def save_yaml(request: Request):
         session, form = await posted(request)
         return await _save(
-            session, lambda: save_text(config_path, form.get("yaml", "")), "/settings?view=yaml"
+            session,
+            lambda: save_text(config_path, form.get("yaml", ""), form.get("version")),
+            "/settings?view=yaml",
         )
 
     async def _save(session: auth.Session, action, back: str):
@@ -482,8 +523,8 @@ def create_web_app(
         say(
             session,
             "ok",
-            f"Saved to {config_path.name}. Syncs use it now; restart `zerostore serve` for a new schedule, "
-            "server addresses, or new AI keys in search.",
+            f"Saved to {config_path.name}. Syncs use it now; restart `zerostore serve` for new "
+            "server addresses or new AI keys in search.",
         )
         return RedirectResponse(back, status_code=303)
 
@@ -545,6 +586,7 @@ def create_web_app(
             done=done,
             schedule=values["schedules"].get(cfg.sync.schedule, cfg.sync.schedule),
             rule_file=AGENT_RULE_FILE,
+            scheduled=scheduled,
         )
 
     @app.post("/setup/sync")

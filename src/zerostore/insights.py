@@ -190,7 +190,7 @@ def status(zs: ZeroStore, now: datetime | None = None) -> dict[str, Any]:
         "sources": sources,
         "documents": sum(s["documents"] for s in sources),
         "chunks": zs.facts.count(),
-        "waiting": len(zs.state.review_items("pending")),
+        "waiting": zs.state.query("SELECT COUNT(*) AS n FROM review_queue WHERE status = 'pending'")[0]["n"],
         "engine": engine_label(cfg),
         "embedder": zs.facts.embedder.name,
         "schedule": cfg.sync.schedule,

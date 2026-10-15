@@ -9,6 +9,7 @@ uses before anything is written, so a bad value never reaches the file.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import re
@@ -21,6 +22,7 @@ from typing import Any
 import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from zerostore.config import (
     LLM_PROVIDERS,
@@ -31,11 +33,13 @@ from zerostore.config import (
     read_secrets,
 )
 
+# Names a typed key is saved under. The ZEROSTORE_ prefix keeps a GITHUB_TOKEN or
+# LLM_API_KEY already set in your shell from quietly winning over the key you typed.
 SECRET_NAMES = {
-    "llm_key": "LLM_API_KEY",
-    "jev_key": "JEV_API_KEY",
-    "github_token": "GITHUB_TOKEN",
-    "linear_key": "LINEAR_API_KEY",
+    "llm_key": "ZEROSTORE_LLM_API_KEY",
+    "jev_key": "ZEROSTORE_JEV_API_KEY",
+    "github_token": "ZEROSTORE_GITHUB_TOKEN",
+    "linear_key": "ZEROSTORE_LINEAR_API_KEY",
 }
 SCHEDULES = {
     "0 6 * * *": "daily at 06:00",
@@ -66,6 +70,19 @@ def read_text(path: Path) -> str:
         raise SettingsError(f"can't read {path}: {exc}") from None
 
 
+def version_of(text: str) -> str:
+    """A fingerprint of the file as a page showed it, to catch edits made elsewhere meanwhile."""
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _check_version(text: str, expected: str | None) -> None:
+    if expected and expected != version_of(text):
+        raise SettingsError(
+            "zerostore.yaml changed since this page was opened (in another tab or the CLI); "
+            "reload the page to see it, then make your change again"
+        )
+
+
 def _secrets_env(path: Path, extra: Mapping[str, str] | None = None) -> dict[str, str]:
     return {**read_secrets(path.parent / SECRETS_FILENAME), **(extra or {}), **os.environ}
 
@@ -81,23 +98,40 @@ def validate(path: Path, text: str, new_secrets: Mapping[str, str] | None = None
         raise SettingsError(str(exc)) from None
 
 
-def _write_private(path: Path, text: str) -> None:
-    """Replace a file in one step, readable only by you."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+def _write(path: Path, text: str) -> None:
+    """Replace a file in one step.
+
+    A symlinked file is written where the link points (the link stays). An existing
+    file keeps its permissions; a new one is readable only by you.
+    """
+    target = path.resolve()
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = stat.S_IRUSR | stat.S_IWUSR
+    try:
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    except OSError as exc:
+        raise SettingsError(f"can't write {target}: {exc}") from None
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
-        os.replace(tmp, path)
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
+    except OSError as exc:
+        Path(tmp).unlink(missing_ok=True)
+        raise SettingsError(f"can't write {target}: {exc}") from None
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
 
 
-def save_text(path: Path, text: str) -> Config:
+def save_text(path: Path, text: str, version: str | None = None) -> Config:
     """Save zerostore.yaml as typed in the YAML view, if it is valid."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")  # browsers send CRLF
+    _check_version(read_text(path), version)
     config = validate(path, text)
-    _write_private(path, text if text.endswith("\n") else text + "\n")
+    _write(path, text if text.endswith("\n") else text + "\n")
     return config
 
 
@@ -122,7 +156,8 @@ def save_secrets(path: Path, secrets: Mapping[str, str]) -> None:
         else:
             out.append(line)
     out.extend(f"{name}={value}" for name, value in left.items())
-    _write_private(target, "\n".join(out) + "\n")
+    _write(target, "\n".join(out) + "\n")
+    os.chmod(target.resolve(), stat.S_IRUSR | stat.S_IWUSR)  # keys: only you, always
 
 
 # The form ------------------------------------------------------------------
@@ -132,8 +167,17 @@ def _split(value: str) -> list[str]:
     return [part.strip() for part in re.split(r"[,\n]", value) if part.strip()]
 
 
+def _plain(value: str) -> str | DoubleQuotedScalarString:
+    """Quote a string that YAML would otherwise read as something else (on, no, 1.0, null...)."""
+    try:
+        reads_back = yaml.safe_load(value)
+    except yaml.YAMLError:
+        reads_back = None
+    return value if reads_back == value else DoubleQuotedScalarString(value)
+
+
 def _flow(items: list[str]) -> CommentedSeq:
-    seq = CommentedSeq(items)
+    seq = CommentedSeq([_plain(i) for i in items])
     seq.fa.set_flow_style()
     return seq
 
@@ -171,7 +215,9 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
     fields keep the key already set.
     """
     y = _yaml()
-    doc = y.load(read_text(path)) or CommentedMap()
+    current = read_text(path)
+    _check_version(current, form.get("version"))
+    doc = y.load(current) or CommentedMap()
     if not isinstance(doc, CommentedMap):
         raise SettingsError(f"{path.name} must be a mapping of settings")
     sections = set(_split(form.get("sections", "")))
@@ -184,7 +230,7 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
             drive["folders"] = _flow(_split(form.get("drive_folders", "")))
             credentials = (form.get("drive_credentials") or "").strip()
             if credentials:
-                drive["credentials"] = credentials
+                drive["credentials"] = _plain(credentials)
         else:
             sources.pop("google_drive", None)
         if form.get("github_on"):
@@ -214,7 +260,7 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
             ai.pop("llm_provider", None)
         model = (form.get("llm_model") or "").strip()
         if model:
-            ai["llm_model"] = model
+            ai["llm_model"] = _plain(model)
         _secret(form, "llm_key", ai, "llm_api_key", found)
         _secret(form, "jev_key", ai, "jev_api_key", found)
 
@@ -224,7 +270,7 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
         retrieval["answer_cutoff"] = _number(form, "answer_cutoff")
         rule = (form.get("rerank_rule") or "").strip()
         if rule:
-            retrieval["rerank_rule"] = rule
+            retrieval["rerank_rule"] = _plain(rule)
         if form.get("narrow_with") in ENGINE_CHOICES:
             retrieval["narrow_with"] = form["narrow_with"]
         if form.get("rerank_with") in RERANK_CHOICES:
@@ -241,7 +287,7 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
     text = out.getvalue()
     config = validate(path, text, found)
     save_secrets(path, found)
-    _write_private(path, text)
+    _write(path, text)
     return config
 
 
@@ -264,6 +310,7 @@ def form_values(path: Path) -> dict[str, Any]:
     raw_linear = (raw.get("sources") or {}).get("linear") or {}
     s = config.sources
     return {
+        "version": version_of(text),
         "config": config,
         "drive": s.google_drive,
         "github": s.github,

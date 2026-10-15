@@ -91,6 +91,8 @@ def create_http_app(
     *,
     config_path: Path | None = None,
     mcp_url: str | None = None,
+    behind_proxy: bool = False,
+    scheduled: bool = True,
 ) -> ASGIApp:
     """The MCP server at /mcp, plus the web UI at / when `web_ui` is on and the config file is known."""
     server = build_server(zs, bearer_token_source)
@@ -100,4 +102,7 @@ def create_http_app(
         return mcp
     from zerostore.web.app import create_web_app
 
-    return Router(mcp, create_web_app(zs, config_path, bound_host=host, mcp_url=mcp_url))
+    web = create_web_app(
+        zs, config_path, bound_host=host, mcp_url=mcp_url, behind_proxy=behind_proxy, scheduled=scheduled
+    )
+    return Router(mcp, web)
