@@ -75,3 +75,44 @@ def test_optimize_keeps_results(seeded):
     assert "Enterprise plans are priced per contract." in texts(
         seeded.facts.search("enterprise contract", include_confidential=False)
     )
+
+
+def test_superseded_chunks_leave_search_and_come_back(seeded):
+    old_id = pricing_doc()[0].id
+    seeded.facts.supersede([old_id], "gdrive:pricing-2027")
+    assert "$20" not in " ".join(texts(seeded.facts.search("pro plan price", include_confidential=True)))
+    assert seeded.facts.get(old_id, include_confidential=True)["superseded_by"] == "gdrive:pricing-2027"
+    assert seeded.facts.restore_superseded("gdrive:pricing-2027") == 1
+    assert "$20" in " ".join(texts(seeded.facts.search("pro plan price", include_confidential=True)))
+    assert seeded.facts.restore_superseded("gdrive:pricing-2027") == 0
+
+
+def test_search_can_exclude_a_document(seeded):
+    rows = seeded.facts.search("pro plan price", include_confidential=True, exclude_doc="gdrive:pricing")
+    assert rows and all(r["doc_id"] != "gdrive:pricing" for r in rows)
+
+
+def test_stores_from_before_superseding_are_upgraded(tmp_path):
+    import lancedb
+    import pyarrow as pa
+
+    uri = str(tmp_path / "old.lance")
+    embedder = HashingEmbedder(64)
+    old = pa.schema(
+        [f for f in FactStore(str(tmp_path / "x.lance"), embedder)._schema() if f.name != "superseded_by"],
+        metadata={b"zerostore.embedder": embedder.name.encode()},
+    )
+    table = lancedb.connect(uri).create_table("chunks", schema=old)
+    row = {**{k: v for k, v in pricing_doc()[0].__dict__.items() if k != "superseded_by"}}
+    table.add([{**row, "id": pricing_doc()[0].id, "vector": embedder.embed(["x"])[0]}])
+    store = FactStore(uri, embedder)
+    assert store.chunks_of("gdrive:pricing")[0]["superseded_by"] == ""
+    store.replace_document("gdrive:pricing", pricing_doc("$29"))
+    assert FactStore.built_with(uri) == embedder.name
+
+
+def test_empty_starts_over_with_a_new_embedder(config, seeded):
+    uri = config.servers.vectordb_uri()
+    fresh = FactStore.empty(uri, HashingEmbedder(32))
+    assert fresh.count() == 0 and FactStore.built_with(uri) == "hashing-32"
+    assert FactStore.built_with(str(config.servers.vectordb_uri()) + "-none") is None

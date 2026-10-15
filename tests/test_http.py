@@ -99,3 +99,25 @@ def test_owner_tools_checked_per_call_over_http(seeded, http_url):
 )
 def test_is_loopback(host, expected):
     assert is_loopback(host) is expected
+
+
+def test_proposals_ask_the_person_over_http(http_url, seeded):
+    import mcp_types as types
+
+    raw, _ = seeded.tokens.create("agent", "default")
+    asked = []
+
+    async def person(context, params):
+        asked.append(params.message)
+        return types.ElicitResult(action="accept", content={"fact": "Refunds are allowed within 30 days."})
+
+    async def go():
+        headers = {"Authorization": f"Bearer {raw}"}
+        transport = streamable_http_client(http_url, http_client=httpx2.AsyncClient(headers=headers))
+        async with Client(transport, elicitation_callback=person) as client:
+            result = await client.call_tool("propose_fact", {"fact": "Refunds: 30 days.", "quote": "q"})
+            return result.structured_content
+
+    out = anyio.run(go)
+    assert out["status"] == "saved" and asked and "Refunds: 30 days." in asked[0]
+    assert "within 30 days" in seeded.config.decisions_path().read_text()

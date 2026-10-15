@@ -8,6 +8,14 @@ from zerostore.store.embeddings import HashingEmbedder
 from zerostore.store.facts import Chunk
 
 
+@pytest.fixture(autouse=True)
+def _private_home(tmp_path, monkeypatch):
+    """Keep every test away from the real ~/.zerostore (decisions.md, credentials)."""
+    monkeypatch.setenv("ZEROSTORE_HOME", str(tmp_path / "zerostore-home"))
+    # Never download the local reranker model in tests, even where zerostore[local] is installed.
+    monkeypatch.setattr("zerostore.decisions.select.make_local", lambda: None)
+
+
 @pytest.fixture
 def config(tmp_path):
     return parse_config(

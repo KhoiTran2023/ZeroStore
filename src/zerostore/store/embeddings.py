@@ -1,9 +1,9 @@
 """Embeddings: turn text into vectors for the fact store.
 
-v1 uses your AI provider's embedding service when it has one, and a small
-local model (fastembed, CPU) when it doesn't. The provider embedder arrives
-with the LLM decision engine; this module holds the interface, the local
-model, and a dependency-free hashing embedder used by tests and the demo.
+v1 uses your AI provider's embedding service when it has one (OpenAI, or a
+local Ollama), and a small local model (fastembed, CPU) when it doesn't. A
+dependency-free hashing embedder covers tests, the demo and machines with
+neither.
 """
 
 from __future__ import annotations
@@ -11,7 +11,10 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import time
 from typing import Protocol, runtime_checkable
+
+import httpx
 
 _WORD = re.compile(r"[a-z0-9$€£%.]+")
 
@@ -68,3 +71,74 @@ class FastEmbedEmbedder:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [list(map(float, v)) for v in self._model.embed(texts)]
+
+
+# Providers with an embedding service, and the model used for it.
+EMBEDDING_MODELS = {"openai": "text-embedding-3-small", "ollama": "nomic-embed-text"}
+_KNOWN_DIMS = {"text-embedding-3-small": 1536, "text-embedding-3-large": 3072}
+
+
+class EmbeddingError(RuntimeError):
+    pass
+
+
+class ProviderEmbedder:
+    """Your AI provider's embedding service (OpenAI-style `/embeddings`)."""
+
+    BATCH = 96
+
+    def __init__(
+        self,
+        provider: str,
+        api_key: str | None,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+        client: httpx.Client | None = None,
+        retries: int = 3,
+    ):
+        from zerostore.decisions.llm import BASE_URLS
+
+        if provider not in EMBEDDING_MODELS:
+            raise EmbeddingError(f"{provider} has no embedding service ZeroStore can use")
+        self.provider = provider
+        self.model = model or EMBEDDING_MODELS[provider]
+        self.name = f"{provider}:{self.model}"
+        self.url = (base_url or BASE_URLS[provider]).rstrip("/") + "/embeddings"
+        self.client = client or httpx.Client(timeout=60)
+        if api_key:
+            self.client.headers.update({"Authorization": f"Bearer {api_key}"})
+        self.retries = retries
+        self.dim = _KNOWN_DIMS.get(self.model) or len(self.embed(["dimension probe"])[0])
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.BATCH):
+            out.extend(self._batch(texts[i : i + self.BATCH]))
+        return out
+
+    def _batch(self, texts: list[str]) -> list[list[float]]:
+        for attempt in range(self.retries + 1):
+            try:
+                response = self.client.post(self.url, json={"model": self.model, "input": texts})
+            except httpx.HTTPError as exc:
+                if attempt < self.retries:
+                    time.sleep(2**attempt)
+                    continue
+                raise EmbeddingError(f"{self.provider} embeddings could not be reached: {exc}") from exc
+            if response.status_code in (429, 500, 502, 503, 504) and attempt < self.retries:
+                time.sleep(2**attempt)
+                continue
+            if response.status_code >= 400:
+                raise EmbeddingError(f"{self.provider} embeddings returned {response.status_code}")
+            try:
+                rows = sorted(response.json()["data"], key=lambda r: r["index"])
+                vectors = [list(map(float, r["embedding"])) for r in rows]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise EmbeddingError(f"{self.provider} sent embeddings ZeroStore couldn't read") from exc
+            if len(vectors) != len(texts):
+                raise EmbeddingError(
+                    f"{self.provider} returned {len(vectors)} vectors for {len(texts)} texts"
+                )
+            return vectors
+        raise AssertionError("unreachable")  # pragma: no cover

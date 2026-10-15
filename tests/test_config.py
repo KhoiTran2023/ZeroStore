@@ -82,3 +82,23 @@ def test_paths_expand_home_but_keep_s3(monkeypatch, tmp_path):
 def test_missing_file_points_to_init(tmp_path):
     with pytest.raises(ConfigError, match="zerostore init"):
         load_config(tmp_path / "nope.yaml")
+
+
+def test_ai_defaults_and_topics():
+    cfg = parse_config({"sources": {}})
+    assert cfg.ai.decision_engine == "jev" and not cfg.ai.has_jev and not cfg.ai.has_llm
+    assert "pricing and plans" in cfg.retrieval.topics
+    cfg = parse_config(
+        {"sources": {}, "ai": {"llm_provider": "Ollama"}, "retrieval": {"topics": ["a", " a ", "b"]}}
+    )
+    assert cfg.ai.llm_provider == "ollama" and cfg.ai.has_llm
+    assert cfg.retrieval.topics == ["a", "b"]
+    with pytest.raises(ConfigError, match="at least one topic"):
+        parse_config({"sources": {}, "retrieval": {"topics": [" "]}})
+
+
+def test_decisions_file_location(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZEROSTORE_HOME", str(tmp_path / "home"))
+    assert parse_config({"sources": {}}).decisions_path() == tmp_path / "home" / "decisions.md"
+    custom = parse_config({"sources": {}, "decisions_file": str(tmp_path / "d.md")})
+    assert custom.decisions_path() == tmp_path / "d.md"
