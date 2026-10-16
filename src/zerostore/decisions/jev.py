@@ -73,6 +73,10 @@ class JevEngine(DecisionEngine):
         self.seconds = 0.0
         self._stats = threading.Lock()
 
+    @property
+    def cache_id(self) -> str:
+        return f"jev:{self.model}"
+
     # Transport ---------------------------------------------------------------
 
     def _ask(self, state: Any, questions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:

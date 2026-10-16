@@ -19,6 +19,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from zerostore.app import ZeroStore
@@ -37,6 +38,7 @@ JUDGE_ERRORS = (EngineError, EmbeddingError)
 
 SYNC_LOCK = "sync"
 SYNC_LOCK_TTL = 2 * 60 * 60  # a sync that takes longer than this is presumed dead
+JUDGMENTS_KEPT_DAYS = 180  # remembered keep answers nobody reused in this long are dropped
 
 
 class SyncBusy(Exception):
@@ -81,6 +83,7 @@ class SyncReport:
     engine: str | None = None  # who judged the changes, e.g. "Jev"
     judged: int = 0  # documents and deletions the engine judged
     judge_seconds: float = 0.0  # time spent waiting on the engine for them
+    remembered: int = 0  # chunks whose keep and topic answers were reused instead of asked again
 
     @property
     def ok(self) -> bool:
@@ -129,6 +132,7 @@ class SyncReport:
             engine=data.get("engine"),
             judged=data.get("judged", 0),
             judge_seconds=data.get("judge_seconds", 0.0),
+            remembered=data.get("remembered", 0),
         )
 
 
@@ -253,6 +257,7 @@ class Ingestor:
         # Confidentiality rules changed: re-check every document, not only changed ones.
         rules_fp = rules_fingerprint(config)
         recheck_all = self.zs.state.get_meta("confidential_rules") != rules_fp
+        remembered_before = self.librarian.remembered
 
         added: list[dict[str, Any]] = []
         missing: list[tuple[dict[str, Any], SourceResult]] = []
@@ -285,6 +290,9 @@ class Ingestor:
             self.zs.state.set_meta("confidential_rules", rules_fp)
         if report.changes:
             self.zs.facts.optimize()
+        report.remembered = self.librarian.remembered - remembered_before
+        cutoff = datetime.now(timezone.utc) - timedelta(days=JUDGMENTS_KEPT_DAYS)
+        self.zs.state.forget_judgments(cutoff.isoformat(timespec="seconds"))
         report.finished_at = utcnow()
         return report
 

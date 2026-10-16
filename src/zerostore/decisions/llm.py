@@ -146,6 +146,10 @@ class LLMEngine(DecisionEngine):
         self.seconds = 0.0
         self._stats = threading.Lock()
 
+    @property
+    def cache_id(self) -> str:
+        return f"llm:{self.provider}:{self.model}"
+
     # Transport ---------------------------------------------------------------
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:

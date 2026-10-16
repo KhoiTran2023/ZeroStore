@@ -78,3 +78,19 @@ def test_pending_items_by_document_and_reopening(tmp_path):
     state.forget_versions()
     doc = state.documents()["d"]
     assert doc["chunks"] == 0 and doc["version"] == "" and doc["rejected_fingerprint"] == "fp9"
+
+
+def test_judgments_are_kept_per_engine_and_dropped_when_unused(tmp_path):
+    state = StateDB(tmp_path / "state.sqlite")
+    keys = [f"k{i}" for i in range(1200)]  # more than one batch of SQLite parameters
+    state.save_judgments("jev:jev-latest", {k: {"keep": 0.9} for k in keys})
+    state.save_judgments("jev:jev-latest", {"k0": {"keep": 0.1}})  # a new answer replaces the old
+    found = state.judgments("jev:jev-latest", [*keys, "missing"])
+    assert len(found) == 1200 and found["k0"] == {"keep": 0.1} and "missing" not in found
+    assert state.judgments("llm:openai:gpt-6-sol", keys) == {}
+    with state.tx() as cur:
+        cur.execute("UPDATE judgments SET used_at = '2026-01-01T00:00:00+00:00'")
+    state.judgments("jev:jev-latest", ["k1"])  # reading one marks it as used
+    assert state.forget_judgments("2026-06-01T00:00:00+00:00") == 1199
+    assert list(state.judgments("jev:jev-latest", keys)) == ["k1"]
+    state.close()

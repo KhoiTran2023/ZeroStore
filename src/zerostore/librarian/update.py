@@ -20,6 +20,7 @@ With no AI set up there is no judgment: every change is applied directly.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -27,10 +28,15 @@ from typing import Any
 from zerostore.app import ZeroStore
 from zerostore.connectors.base import SourceDocument
 from zerostore.decisions.base import (
+    KEEP_QUESTION,
     MOVED_PREFIX,
+    NO_TOPIC,
+    ROUTE_QUESTION,
     Candidate,
     DecisionEngine,
     DeletedFile,
+    Pick,
+    YesNo,
     topics_from,
 )
 from zerostore.store.facts import Chunk
@@ -60,6 +66,21 @@ class Supersede:
 
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def classify_key(text: str, topics: list[str]) -> str:
+    """What a keep-and-topic answer depends on: the questions, the topic list and the text."""
+    asked = json.dumps([KEEP_QUESTION, ROUTE_QUESTION, NO_TOPIC, topics, text])
+    return hashlib.sha256(asked.encode()).hexdigest()
+
+
+def _answer_to(answer: tuple[YesNo, Pick]) -> dict[str, Any]:
+    keep, route = answer
+    return {"keep": keep.probability, "route": asdict(route)}
+
+
+def _answer_from(data: dict[str, Any]) -> tuple[YesNo, Pick]:
+    return YesNo(data["keep"]), Pick(**data["route"])
 
 
 @dataclass
@@ -143,6 +164,7 @@ class Librarian:
     def __init__(self, zs: ZeroStore, judge: DecisionEngine | None):
         self.zs = zs
         self.judge = judge
+        self.remembered = 0  # chunks whose keep and topic answers were reused, not asked again
 
     @property
     def threshold(self) -> float:
@@ -180,9 +202,7 @@ class Librarian:
         confidences: list[float] = []
         topics = self.zs.config.retrieval.topics
         kept: list[Chunk] = []
-        for chunk, (keep, route) in zip(
-            chunks, self.judge.classify([c.text for c in chunks], topics), strict=True
-        ):
+        for chunk, (keep, route) in zip(chunks, self.classify([c.text for c in chunks], topics), strict=True):
             confidences.append(keep.confidence)
             if keep.yes:
                 chunk.topics = topics_from(route)
@@ -231,6 +251,26 @@ class Librarian:
         plan.confidence = min(confidences) if confidences else 1.0
         plan.engine = self.judge.label
         return plan
+
+    def classify(self, texts: list[str], topics: list[str]) -> list[tuple[YesNo, Pick]]:
+        """`keep` and `route` for each text, asking the engine only about texts it hasn't seen.
+
+        An edit to a long document changes a few chunks; the rest get the answers the
+        same engine gave before, for the same questions and topics.
+        """
+        assert self.judge is not None
+        keys = [classify_key(text, topics) for text in texts]
+        engine = self.judge.cache_id
+        saved = self.zs.state.judgments(engine, sorted(set(keys)))
+        known = {key: _answer_from(answer) for key, answer in saved.items()}
+        ask = {key: text for key, text in zip(keys, texts, strict=True) if key not in known}
+        if ask:
+            answers = self.judge.classify(list(ask.values()), topics)
+            fresh = dict(zip(ask, answers, strict=True))
+            self.zs.state.save_judgments(engine, {key: _answer_to(a) for key, a in fresh.items()})
+            known.update(fresh)
+        self.remembered += len(texts) - len(ask)
+        return [known[key] for key in keys]
 
     def _closest_other(self, chunk: Chunk) -> dict[str, Any] | None:
         """The nearest live fact from another document that this chunk may compare against."""

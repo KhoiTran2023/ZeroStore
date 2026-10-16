@@ -122,6 +122,11 @@ class DecisionEngine(ABC):
     name: str = "engine"
     label: str = "Engine"  # shown to people, e.g. "Jev" or "your LLM (claude-sonnet-5-5)"
 
+    @property
+    def cache_id(self) -> str:
+        """Names this engine and model, so a remembered answer is reused only by the one that gave it."""
+        return f"{type(self).__name__}:{self.label}"
+
     @abstractmethod
     def keep(self, texts: list[str]) -> list[YesNo]: ...
 
