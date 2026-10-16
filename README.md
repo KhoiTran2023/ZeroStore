@@ -128,7 +128,16 @@ Give the server an HTTPS address with a certificate that every computer already 
 
 Run ZeroStore behind it with `zerostore service install --behind-https-proxy --public-url https://<that address>` (it keeps listening on `localhost` only). The setup page then shows the `claude mcp add --transport http` line with that address.
 
-Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else. Claude Desktop's and claude.ai's "custom connector" screens can't send ZeroStore's token (they sign in with OAuth, which ZeroStore doesn't offer yet), so use the settings file or `claude mcp add` lines above instead.
+Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else.
+
+### Add it like Gmail (Claude's Connectors)
+
+Claude on the web, in Claude Desktop and on the phone can add ZeroStore the way it adds Gmail, with no token to copy:
+
+1. In Claude, open Settings, Connectors, Add custom connector, and paste `https://<your address>/mcp`.
+2. Claude sends you to ZeroStore's web UI. Sign in if asked, pick the access level (default or confidential), and click Allow.
+
+From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. The connection shows in your token list as "Claude (connector)"; revoke it there to disconnect. Claude's servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
 
 ## How access works
 
@@ -139,6 +148,8 @@ The MCP server is the only way in, and every request carries a token. Each token
 | `default` | Non-confidential facts | Search, read, propose facts for you to approve |
 | `confidential` | Everything | Search, read, propose facts for you to approve |
 | `owner` | Everything | Search, read, manage tokens and the review queue, see status and activity, sign in to the web UI |
+
+A connector added in Claude's settings gets `default` or `confidential`, never `owner`.
 
 No token can edit a fact. Facts change only when your sources change. Tokens are stored hashed, every request is logged, and the server binds to `localhost` unless you give it HTTPS.
 

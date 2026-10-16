@@ -48,6 +48,7 @@ def test_a_stage_2_file_is_upgraded_in_place(tmp_path):
     assert item["payload"] == {"fact": "f"} and item["doc_id"] is None
     doc = state.documents()["d"]
     assert doc["rejected_fingerprint"] is None and doc["source_deleted_at"] is None
+    assert state.query("SELECT COUNT(*) AS n FROM oauth_clients")[0]["n"] == 0
     state.close()
     StateDB(path).close()  # opening again changes nothing
 

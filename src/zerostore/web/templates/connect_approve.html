@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Allow {{ p.name }}? · ZeroStore{% endblock %}
+{% block main_class %}login{% endblock %}
+{% block content %}
+<h1 class="m" style="font-size:20px">Let {{ p.name }} use your ZeroStore?</h1>
+<p class="muted" style="margin:0">It will look up your company's knowledge the way an agent with its own token does. It shows in Settings under tokens as <b>{{ p.name }} (connector)</b>; revoke it there to disconnect it.</p>
+<p class="muted" style="margin:0">After you answer, you go back to <b class="m">{{ returns_to }}</b>. Only allow it if you just added ZeroStore there yourself.</p>
+<form method="post" action="/connect/approve" class="stack" hx-boost="false">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="request" value="{{ p.id }}">
+  <label><span>Access</span><select class="f" name="level"><option value="default">default (no confidential facts)</option><option value="confidential">confidential (sees everything)</option></select></label>
+  <div class="actions"><button class="btn go" type="submit" name="answer" value="allow" autofocus>Allow</button><button class="btn" type="submit" name="answer" value="deny">Deny</button></div>
+</form>
+{% endblock %}
