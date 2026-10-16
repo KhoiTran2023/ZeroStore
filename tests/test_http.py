@@ -17,17 +17,15 @@ from mcp.client.streamable_http import streamable_http_client
 from zerostore.mcp.http import create_http_app, is_loopback
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @contextmanager
 def running(app):
-    port = free_port()
+    # The socket is bound here and handed to uvicorn, so no other server can take the port
+    # between choosing it and listening on it.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     deadline = time.time() + 10
     while not server.started:
@@ -39,6 +37,8 @@ def running(app):
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        sock.close()
+        assert not thread.is_alive(), "the test server did not stop"
 
 
 @pytest.fixture
@@ -148,7 +148,7 @@ def initialize(url, token, host):
         "Accept": "application/json, text/event-stream",
         "Host": host,
     }
-    return httpx2.post(url, json=INITIALIZE, headers=headers).status_code
+    return httpx2.post(url, json=INITIALIZE, headers=headers, timeout=30).status_code
 
 
 def test_behind_a_tunnel_the_public_name_is_answered(seeded):
