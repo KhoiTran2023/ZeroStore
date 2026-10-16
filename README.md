@@ -31,7 +31,7 @@ To try it with your own agents, run `zerostore demo start`. It prints a `claude 
 pip install git+https://github.com/KhoiTran2023/ZeroStore   # pipx works too
 zerostore init                                              # settings, data folder, your owner token
 zerostore token create --name claude-code --level confidential
-claude mcp add zerostore -e ZEROSTORE_TOKEN=<that token> -- zerostore serve
+claude mcp add zerostore -e ZEROSTORE_TOKEN=<that token> -- "$(command -v zerostore)" serve
 ```
 
 Then list your sources in `~/.zerostore/zerostore.yaml` and run `zerostore sync`:
@@ -80,11 +80,13 @@ On Linux it's a systemd user unit, and `install` turns on lingering so it starts
 
 The service doesn't see your shell's environment variables, so keep keys in `secrets.env` next to `zerostore.yaml` (Settings in the web UI saves them there); `install` warns about any `${NAME}` in your settings that only your shell has.
 
-On an always-on server such as AWS EC2, put HTTPS in front (Caddy, a load balancer, or a Cloudflare or Tailscale tunnel) and run:
+On an always-on server such as AWS EC2, put HTTPS with a real certificate in front (see [Agents on another computer](#agents-on-another-computer)) and run:
 
 ```bash
-zerostore service install --host 0.0.0.0 --behind-https-proxy --public-url https://zs.example.com
+zerostore service install --behind-https-proxy --public-url https://zs.example.com
 ```
+
+Add `--host 0.0.0.0` only when the HTTPS proxy runs on a different machine, such as a cloud load balancer.
 
 ## The librarian's judgment
 
@@ -106,6 +108,27 @@ ai:
 With no AI key, every change is applied directly, and search still works (reranked by a small local model if you install `zerostore[local]`).
 
 Agents can also propose facts (`propose_fact`). The person using the agent is asked "Save this to company facts?" in their app; approved facts go to `~/.zerostore/decisions.md`, which ZeroStore reads back like any other source.
+
+## Connect your agents
+
+**On the same computer, nothing needs a certificate.** The agent starts `zerostore serve` itself and talks to it over stdio, with no network and no port. "Connect to Claude" on the setup page (or `zerostore token create`) gives you the lines to paste:
+
+- Claude Code: `claude mcp add zerostore -e ZEROSTORE_TOKEN=<token> -- /full/path/to/zerostore serve`
+- Claude Desktop (Settings, Developer, Edit Config), Cursor and most others: the same command as `mcpServers` JSON.
+
+The lines use the full path to `zerostore`, because Claude Desktop and other apps opened from the Dock or Start menu don't get your terminal's PATH and wouldn't find a bare `zerostore`. When `zerostore serve --http` is running, Claude Code can also connect to `http://localhost:8765/mcp` with `claude mcp add --transport http`; plain HTTP is only allowed on `localhost`.
+
+### Agents on another computer
+
+Give the server an HTTPS address with a certificate that every computer already trusts. Then agents connect with nothing to install or trust:
+
+- **Tailscale** (private to your tailnet): on the server, `tailscale serve --bg 8765` publishes `https://<machine>.<tailnet>.ts.net` with a Let's Encrypt certificate.
+- **Cloudflare Tunnel** (your own domain, no open ports): `cloudflared tunnel` pointed at `http://localhost:8765`.
+- **Caddy** (your own domain, port 443 open): `zs.example.com { reverse_proxy localhost:8765 }` gets a certificate automatically.
+
+Run ZeroStore behind it with `zerostore service install --behind-https-proxy --public-url https://<that address>` (it keeps listening on `localhost` only). The setup page then shows the `claude mcp add --transport http` line with that address.
+
+Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else. Claude Desktop's and claude.ai's "custom connector" screens can't send ZeroStore's token (they sign in with OAuth, which ZeroStore doesn't offer yet), so use the settings file or `claude mcp add` lines above instead.
 
 ## How access works
 

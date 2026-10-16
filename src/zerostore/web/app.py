@@ -24,8 +24,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from zerostore import __version__
+from zerostore.agents import commands as agent_commands
 from zerostore.app import ZeroStore
-from zerostore.config import CONFIG_FILENAME, config_env, home_dir
+from zerostore.config import config_env
 from zerostore.connectors import google_signin as google
 from zerostore.web import auth, charts
 from zerostore.web.owner import OwnerClient, OwnerError
@@ -130,19 +131,13 @@ class SyncRunner:
 
 def connect_commands(token: str, config_path: Path, http_url: str | None = None) -> dict[str, str]:
     """What to paste into Claude Code, Claude Desktop, Cursor and other agents."""
-    default = (home_dir() / CONFIG_FILENAME).expanduser().resolve()
-    extra = [] if config_path.expanduser().resolve() == default else ["-c", str(config_path)]
-    shell_extra = f' -c "{config_path}"' if extra else ""
-    entry = {"command": "zerostore", "args": ["serve", *extra], "env": {"ZEROSTORE_TOKEN": token}}
     out = {
-        "claude_code": f"claude mcp add zerostore -e ZEROSTORE_TOKEN={token} -- zerostore serve{shell_extra}",
-        "json": json.dumps({"mcpServers": {"zerostore": entry}}, indent=2),
+        "claude_code": agent_commands.claude_code_stdio(token, config_path),
+        "json": agent_commands.stdio_json(token, config_path),
     }
     if http_url:
-        out["http"] = json.dumps(
-            {"mcpServers": {"zerostore": {"url": http_url, "headers": {"Authorization": f"Bearer {token}"}}}},
-            indent=2,
-        )
+        out["claude_code_http"] = agent_commands.claude_code_http(token, http_url)
+        out["http"] = agent_commands.http_json(token, http_url)
     return out
 
 

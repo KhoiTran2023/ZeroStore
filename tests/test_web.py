@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import html
+import json
 import os
 import re
+import shlex
 import stat
 import time
 
@@ -12,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp import Client
 
+from zerostore.agents.commands import program
 from zerostore.config import load_config, read_secrets
 from zerostore.demo import Demo
 from zerostore.insights import activity
@@ -368,7 +372,8 @@ def test_connect_to_claude_creates_a_token_and_shows_it_once(web, demo):
     page = web.post("/tokens", data={**data, "back": "/setup?step=3"}).text
     raw = re.search(r'id="new-token">(zs_[^<]+)<', page).group(1)
     assert zs.tokens.verify(raw).level.value == "confidential"
-    assert f"claude mcp add zerostore -e ZEROSTORE_TOKEN={raw} -- zerostore serve -c" in page
+    line = f"claude mcp add zerostore -e ZEROSTORE_TOKEN={raw} -- {program()} serve -c"
+    assert line in html.unescape(page)
     assert raw not in web.get("/setup?step=3").text  # shown once
 
 
@@ -383,10 +388,20 @@ def test_revoking_a_token(web, demo):
 def test_connect_commands_skip_the_config_flag_for_the_default_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ZEROSTORE_HOME", str(tmp_path))
     plain = connect_commands("zs_tok", tmp_path / "zerostore.yaml")
-    assert plain["claude_code"].endswith("-- zerostore serve")
-    other = connect_commands("zs_tok", tmp_path / "x" / "zerostore.yaml", "http://localhost:8765/mcp")
-    assert '-c "' in other["claude_code"]
-    assert "Bearer zs_tok" in other["http"]
+    assert shlex.split(plain["claude_code"])[-2:] == [program(), "serve"]
+    assert "http" not in plain
+    other = tmp_path / "my folder" / "zerostore.yaml"
+    both = connect_commands("zs_tok", other, "http://localhost:8765/mcp")
+    assert shlex.split(both["claude_code"])[-3:] == ["serve", "-c", str(other)]
+    assert shlex.split(both["claude_code_http"]) == [
+        "claude", "mcp", "add", "--transport", "http", "zerostore", "http://localhost:8765/mcp",
+        "--header", "Authorization: Bearer zs_tok",
+    ]  # fmt: skip
+    assert json.loads(both["http"])["mcpServers"]["zerostore"] == {
+        "type": "http",
+        "url": "http://localhost:8765/mcp",
+        "headers": {"Authorization": "Bearer zs_tok"},
+    }
 
 
 # Sync from the page -------------------------------------------------------------------

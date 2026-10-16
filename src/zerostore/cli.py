@@ -21,6 +21,7 @@ import typer
 
 from zerostore import __version__
 from zerostore.access.tokens import AccessLevel
+from zerostore.agents import commands as agent_commands
 from zerostore.agents import rules
 from zerostore.config import (
     CONFIG_FILENAME,
@@ -170,7 +171,7 @@ def init(
     typer.echo("")
     typer.echo("Next: give each agent its own token, then connect it. For Claude Code:")
     typer.echo("  zerostore token create --name claude-code --level confidential")
-    typer.echo("  claude mcp add zerostore -e ZEROSTORE_TOKEN=<that token> -- zerostore serve")
+    typer.echo("  " + agent_commands.claude_code_stdio("<that token>", config_path))
 
 
 def _offer_rule(directory: Path, rule: bool | None) -> None:

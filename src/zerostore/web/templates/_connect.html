@@ -1,17 +1,22 @@
 {% set c = f.commands %}
 <div class="copyable">
-  <span class="cmd">Claude Code: run this in a terminal</span>
+  <span class="cmd">Claude Code on this computer: run this in a terminal</span>
   <pre class="copy" id="cmd-claude">{{ c.claude_code }}</pre>
   <span><button type="button" class="btn small" data-copy="cmd-claude">Copy</button></span>
 </div>
 <div class="copyable">
-  <span class="cmd">Claude Desktop, Cursor and most others: add this to the app's MCP settings file</span>
+  <span class="cmd">Claude Desktop, Cursor and most others on this computer: add this to the app's MCP settings file (Claude Desktop: Settings, Developer, Edit Config), then restart the app</span>
   <pre class="copy" id="cmd-json">{{ c.json }}</pre>
   <span><button type="button" class="btn small" data-copy="cmd-json">Copy</button></span>
 </div>
 {% if c.http %}
 <div class="copyable">
-  <span class="cmd">Agents that connect over HTTP</span>
+  <span class="cmd">Claude Code over HTTP, for example from another computer</span>
+  <pre class="copy" id="cmd-claude-http">{{ c.claude_code_http }}</pre>
+  <span><button type="button" class="btn small" data-copy="cmd-claude-http">Copy</button></span>
+</div>
+<div class="copyable">
+  <span class="cmd">Cursor and other agents that connect over HTTP</span>
   <pre class="copy" id="cmd-http">{{ c.http }}</pre>
   <span><button type="button" class="btn small" data-copy="cmd-http">Copy</button></span>
 </div>

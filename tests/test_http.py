@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from contextlib import contextmanager
 
 import anyio
 import httpx2
@@ -22,12 +23,10 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def http_url(seeded):
+@contextmanager
+def running(app):
     port = free_port()
-    server = uvicorn.Server(
-        uvicorn.Config(create_http_app(seeded), host="127.0.0.1", port=port, log_level="error")
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.time() + 10
@@ -35,9 +34,17 @@ def http_url(seeded):
         if time.time() > deadline:
             raise RuntimeError("server did not start")
         time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}/mcp"
-    server.should_exit = True
-    thread.join(timeout=10)
+    try:
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+@pytest.fixture
+def http_url(seeded):
+    with running(create_http_app(seeded)) as url:
+        yield url
 
 
 def client_for(url, token):
@@ -121,3 +128,51 @@ def test_proposals_ask_the_person_over_http(http_url, seeded):
     out = anyio.run(go)
     assert out["status"] == "saved" and asked and "Refunds: 30 days." in asked[0]
     assert "within 30 days" in seeded.config.decisions_path().read_text()
+
+
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "t", "version": "1"},
+    },
+}
+
+
+def initialize(url, token, host):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json, text/event-stream",
+        "Host": host,
+    }
+    return httpx2.post(url, json=INITIALIZE, headers=headers).status_code
+
+
+def test_behind_a_tunnel_the_public_name_is_answered(seeded):
+    """Tailscale, Cloudflare or Caddy on this machine forward requests addressed to the public name."""
+    raw, _ = seeded.tokens.create("d", "default")
+    app = create_http_app(
+        seeded, host="127.0.0.1", mcp_url="https://zs.tail1234.ts.net/mcp", behind_proxy=True
+    )
+    with running(app) as url:
+        port = url.split(":")[2].split("/")[0]
+        assert initialize(url, raw, "zs.tail1234.ts.net") == 200
+        assert initialize(url, raw, f"localhost:{port}") == 200
+        assert initialize(url, raw, "attacker.example") == 421  # still guarded against DNS rebinding
+
+
+def test_without_a_proxy_only_localhost_is_answered(seeded):
+    raw, _ = seeded.tokens.create("d", "default")
+    with running(create_http_app(seeded, host="127.0.0.1")) as url:
+        assert initialize(url, raw, "zs.tail1234.ts.net") == 421
+
+
+def test_behind_a_proxy_without_a_public_url_any_name_is_answered(seeded):
+    raw, _ = seeded.tokens.create("d", "default")
+    app = create_http_app(seeded, host="127.0.0.1", mcp_url="http://127.0.0.1:8765/mcp", behind_proxy=True)
+    with running(app) as url:
+        assert initialize(url, raw, "zs.example.com") == 200
+        assert initialize(url, "zs_nope", "zs.example.com") == 401  # the token still decides

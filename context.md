@@ -39,6 +39,7 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Background service (`zerostore service`, `src/zerostore/service.py`): a systemd user unit on Linux (`~/.config/systemd/user/zerostore.service`; `install` turns on lingering with `loginctl enable-linger` so it starts on boot, or prints the `sudo` line when refused), a system unit when run as root, and a launchd agent on macOS (`~/Library/LaunchAgents/zerostore.serve.plist`, label `zerostore.serve`, logs in `<config folder>/logs/serve.log`, starts at login). It runs `<this python> -m zerostore serve --http --config <absolute path>` (the interpreter path is kept unresolved so a pipx/uv venv survives upgrades) plus only the options given to `install`, so `zerostore.yaml` stays in charge of the rest. `install` stops an existing service first, refuses a port something else is listening on, waits up to 30 seconds for the port to answer, and warns about `${NAME}`s that only the current shell has (the service reads `secrets.env`, not the shell). Every command goes through an injectable runner, so tests never touch the real service manager; the CI `install` job does a real install on Ubuntu (systemd) and macOS (launchd).
 - `install.sh` (POSIX sh, shellcheck-clean): installs with uv, else pipx with a Python 3.10+, else installs uv first (uv fetches Python when needed); `ZEROSTORE_PACKAGE` overrides what is installed (default `git+https://github.com/KhoiTran2023/ZeroStore` until the package is on PyPI), `ZEROSTORE_NO_SERVICE=1` and `ZEROSTORE_NO_OPEN=1` skip steps. Then `zerostore init --no-rule`, `zerostore service install` (if that fails, it prints `zerostore serve --http --open` and carries on), and `zerostore ui`. `zerostore ui` and `serve --open` don't open a browser on Linux without a display (Python would start a text browser over ssh). An empty `ZEROSTORE_HOME` counts as unset.
 - Keep and topic answers are remembered in the state table `judgments`, keyed by the engine's `cache_id` (`jev:<model>`, `llm:<provider>:<model>`, or class name and label for others) and a SHA-256 of the keep and route questions, the topic list and the chunk text. `Librarian.classify` asks the engine only about texts it has no answer for, so an edit to a long document re-asks only the changed chunks, and the same text in another document is not asked again; reindex reuses them too. `compare` is never cached, since its answer depends on the rest of the store. A failed judgment saves nothing. Reading an answer marks it used; each sync drops answers unused for 180 days. `SyncReport.remembered` counts the chunks whose answers were reused.
+- Connecting agents (`agents/commands.py`): on the same computer agents start `zerostore serve` over stdio, so no port or certificate is involved. Every pasted line (setup page, `init`, demo) uses the full path to the zerostore program (next to the running Python, else on PATH), because Claude Desktop and other apps opened from the Dock get a short PATH (`/usr/bin:/bin`) and can't find `~/.local/bin/zerostore`. Over HTTP the setup page shows a `claude mcp add --transport http` line and `mcpServers` JSON with `"type": "http"`. For other computers the README recommends an HTTPS address with a publicly trusted certificate (Tailscale Serve, Cloudflare Tunnel, Caddy) in front of a localhost bind with `--behind-https-proxy --public-url`, never a self-signed or IP-address certificate (every client would need the root.crt). The MCP library guards loopback binds against DNS rebinding by answering only `localhost` Host headers, which made /mcp answer 421 behind such a proxy; `mcp/http.py` `host_check` now also allows the `--public-url` host (and turns the check off behind a proxy with no public URL; every request still needs a token). claude.ai and Claude Desktop custom connectors can't send the bearer token; they need OAuth, which is still a later stage.
 - State schema v5 adds the `judgments` table. State schema v4 adds `access_log.duration_ms`. State schema v3 adds `review_queue.doc_id`, `documents.rejected_fingerprint` and `documents.source_deleted_at`; older files are upgraded on open. Older fact stores get the `superseded_by` column on open.
 
 ## Current state
@@ -50,6 +51,7 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Stage 5 (web UI): setup, status (with charts), review, log and settings pages in the mockup E design, served by `zerostore serve --http`; sign-in by one-time link (`zerostore ui`) or owner token; owner MCP tools `status` and `activity`; keys saved to `secrets.env`.
 - Stage 6 (installer and service): `install.sh` and `zerostore service install / status / uninstall` (systemd and launchd), with a CI job that installs for real on Linux and macOS.
 - Stage 7 (Sign in with Google): the setup page signs in to Google (installed-app OAuth with PKCE), saves the credentials file, and browses Drive folders to add or remove.
+- Connecting Claude (after stage 8): checked end to end with Claude Code over stdio, local HTTP and a tunnel's public name. Fixed the pasted settings to use the full path to `zerostore` and fixed /mcp refusing a tunnel's public name (421).
 - Stage 8 (remembered keep answers): edits to long documents only send the changed chunks to the AI for keep and topic answers.
 - `zerostore report`: the spec and plan (Oct 13) say the stale-facts report was dropped, though the spec's CLI list still names `report`; Khoi was asked whether to drop it, build a what-changed report, or build the stale-facts card.
 
@@ -83,7 +85,8 @@ ZeroStore/
 │   ├── access/
 │   │   └── tokens.py         Access levels; token create, verify, list, revoke, auto-approve
 │   ├── agents/
-│   │   └── rules.py          Adds and removes the "check ZeroStore first" line in agent settings files
+│   │   ├── rules.py          Adds and removes the "check ZeroStore first" line in agent settings files
+│   │   └── commands.py       The lines to paste into Claude Code, Claude Desktop, Cursor and others (full path to zerostore)
 │   ├── connectors/
 │   │   ├── base.py           Connector interface: list items with versions, fetch one document
 │   │   ├── decisions.py      decisions.md: approved agent proposals, appended and read back as a source
@@ -115,7 +118,7 @@ ZeroStore/
 │   ├── mcp/
 │   │   ├── descriptions.py   Server instructions, tool descriptions and the agent rule line
 │   │   ├── server.py         The MCP server: tools, per-call token and level checks, access logging
-│   │   └── http.py           Streamable HTTP app with bearer-token check at the door, routed next to the web UI
+│   │   └── http.py           Streamable HTTP app: bearer-token check at the door, allowed host names, routed next to the web UI
 │   ├── web/
 │   │   ├── app.py            Routes and pages: sign-in, status, review, log, settings, tokens, setup (with Google sign-in), sync
 │   │   ├── auth.py           One-time login codes, in-memory sessions, CSRF and host-name checks
@@ -131,7 +134,8 @@ ZeroStore/
 └── tests/                    Tests: config, tokens, fact store, state, MCP server (in-process, HTTP, stdio), CLI,
                               rules, connectors and engines (fake APIs), chunking, ingestion, the librarian's
                               judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI,
-                              service and install.sh (faked service manager), Sign in with Google (fake Google)
+                              service and install.sh (faked service manager), Sign in with Google (fake Google),
+                              connect commands (started with a short PATH, as Claude Desktop does)
 ```
 
 ## What each folder contains
@@ -140,7 +144,7 @@ ZeroStore/
 - Repository root: `install.sh`, the one-line installer, sits here so it can be fetched from a raw GitHub URL.
 - `src/zerostore/`: the Python package behind the `zerostore` command.
 - `src/zerostore/access/`: tokens and access levels.
-- `src/zerostore/agents/`: edits to agent settings files (the "check ZeroStore first" line).
+- `src/zerostore/agents/`: connecting agents: the "check ZeroStore first" line in their settings files, and the commands and settings to paste into them.
 - `src/zerostore/connectors/`: one read-only module per source, plus the shared interface, Google access tokens and the Sign in with Google flow, decisions.md and the demo's simulated sources.
 - `src/zerostore/decisions/`: the decision engine: every judgment call as a typed question, answered by Jev, your LLM or a local reranker.
 - `src/zerostore/demo/`: `zerostore demo`: the made-up company Pebble & Co. and the story told about it.
