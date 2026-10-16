@@ -10,7 +10,9 @@ from __future__ import annotations
 import ipaddress
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from zerostore.access.tokens import TokenError, TokenStore
@@ -85,6 +87,30 @@ class Router:
             await self.web(scope, receive, send)
 
 
+LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+LOOPBACK_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+def host_check(host: str, behind_proxy: bool, mcp_url: str | None) -> TransportSecuritySettings | None:
+    """Which Host headers /mcp answers.
+
+    On a loopback address the MCP library only answers requests addressed to localhost,
+    against DNS rebinding. Behind an HTTPS proxy or tunnel (Tailscale, Cloudflare, Caddy)
+    on this machine, requests arrive addressed to the public name, so that name is allowed
+    too. None keeps the library's own rule.
+    """
+    if not (behind_proxy and is_loopback(host)):
+        return None
+    public = urlparse(mcp_url or "")
+    if not public.netloc or is_loopback(public.hostname or ""):
+        # The public name isn't known (no --public-url). Every request still needs a token.
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(
+        allowed_hosts=[*LOOPBACK_HOSTS, public.netloc, f"{public.netloc}:*"],
+        allowed_origins=[*LOOPBACK_ORIGINS, f"{public.scheme}://{public.netloc}"],
+    )
+
+
 def create_http_app(
     zs: ZeroStore,
     host: str = "127.0.0.1",
@@ -96,7 +122,9 @@ def create_http_app(
 ) -> ASGIApp:
     """The MCP server at /mcp, plus the web UI at / when `web_ui` is on and the config file is known."""
     server = build_server(zs, bearer_token_source)
-    inner = server.streamable_http_app(streamable_http_path=MCP_PATH, host=host)
+    inner = server.streamable_http_app(
+        streamable_http_path=MCP_PATH, host=host, transport_security=host_check(host, behind_proxy, mcp_url)
+    )
     mcp = BearerAuth(inner, zs.tokens)
     if not (zs.config.web_ui and config_path):
         return mcp

@@ -7,6 +7,7 @@ token, so every answer here is one a connected agent would get.
 from __future__ import annotations
 
 import os
+import shlex
 import time
 from collections.abc import Callable
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import anyio
 import typer
 
+from zerostore.agents import commands as agent_commands
 from zerostore.app import ZeroStore
 from zerostore.demo import NEW_PRICE, NOTE_TEXT, OLD_PRICE, Demo
 from zerostore.librarian.ingestion import Ingestor, SyncReport
@@ -212,12 +214,12 @@ def start(demo: Demo, teller: Teller) -> None:
 
 def connect_help(demo: Demo, tokens: dict[str, str], teller: Teller, *, after_story: bool) -> None:
     config = demo.config_path
-    serve = f'zerostore serve -c "{config}"'
+    serve = shlex.join([agent_commands.program(), *agent_commands.serve_args(config)])
     claude = tokens.get("claude-code", "<token>")
     other = tokens.get("cursor", "<token>")
     teller.say("")
     teller.say("Ask Pebble & Co. from your own agents:", bold=True)
-    teller.say(f"  Claude Code:  claude mcp add pebble-demo -e ZEROSTORE_TOKEN={claude} -- {serve}")
+    teller.say(f"  Claude Code:  {agent_commands.claude_code_stdio(claude, config, name='pebble-demo')}")
     teller.say(f"  Cursor, Codex and others: run `{serve}` with ZEROSTORE_TOKEN={other}")
     teller.say("  Both tokens have default access, so the confidential Finance folder stays hidden.")
     teller.say("")
