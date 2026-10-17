@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -198,6 +199,7 @@ def create_http_app(
     mcp_url: str | None = None,
     behind_proxy: bool = False,
     scheduled: bool = True,
+    scheduler_alive: Callable[[], bool] | None = None,
 ) -> ASGIApp:
     """The MCP server at /mcp, plus the web UI at / when `web_ui` is on and the config file is known."""
     server = build_server(zs, bearer_token_source)
@@ -219,6 +221,7 @@ def create_http_app(
         mcp_url=mcp_url,
         behind_proxy=behind_proxy,
         scheduled=scheduled,
+        scheduler_alive=scheduler_alive,
         connectors=provider,
     )
     return Router(mcp, web, oauth)

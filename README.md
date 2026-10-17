@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, and remembered keep answers so edits to long documents cost less.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, remembered keep answers so edits to long documents cost less, connectors for Claude, ChatGPT and Grok, roles and tags, and live health for the four services. See [CHANGELOG.md](CHANGELOG.md) for what changed in each step.
 
 ## Install
 
@@ -87,6 +87,19 @@ zerostore service install --behind-https-proxy --public-url https://zs.example.c
 ```
 
 Add `--host 0.0.0.0` only when the HTTPS proxy runs on a different machine, such as a cloud load balancer.
+
+## The four services
+
+One program, `zerostore serve --http`, runs all four parts:
+
+| Part | What it does | Where |
+|---|---|---|
+| web console | the admin pages: setup, status, review, log, settings | `http://<address>/` |
+| mcp server | where agents connect and ask | `http://<address>/mcp` |
+| vector db | LanceDB, holding the facts and their embeddings | `servers.vectordb` in `zerostore.yaml` |
+| ingestion agent | the librarian's timed syncs from Google Drive, GitHub and Linear | `sync.schedule` in `zerostore.yaml` |
+
+The settings page shows whether each part is running, and why, and the status page shows the same as four dots. From a terminal, `zerostore status` lists them too, even while the server runs elsewhere on the same machine. The server writes a heartbeat to the state file every 15 seconds, and a server that stops writing it shows as stopped. `--no-schedule` turns the ingestion agent off, which shows as off rather than stopped.
 
 ## The librarian's judgment
 
@@ -194,7 +207,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore review` | Lists what waits for you; `review approve <id>` / `review reject <id>` decide |
 | `zerostore reindex` | Rebuilds the fact store from your sources (for example after switching embeddings) |
 | `zerostore token create / list / role / revoke` | Manages access tokens and their roles |
-| `zerostore status` | Shows what ZeroStore holds and what waits for review |
+| `zerostore status` | Shows what ZeroStore holds, what waits for review, and whether the four services are up |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
 | `zerostore service install / status / uninstall` | Keeps `zerostore serve --http` running in the background (systemd or launchd) |
 | `zerostore demo` | Plays the Pebble & Co. story; `demo start`, `change-price`, `add-note` and `remove` step through it |

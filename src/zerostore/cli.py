@@ -213,23 +213,21 @@ def serve(
 ) -> None:
     """Run the MCP server (stdio for one agent, or HTTP for many, with the web UI), plus timed syncs."""
     zs = _open(config, quiet=False)
+    scheduler = None
     # Over HTTP the scheduler starts even with no sources yet: the web UI can add them while it runs.
     if schedule and (http or _has_sources(zs.config)):
         from zerostore.librarian.ingestion import Ingestor
         from zerostore.scheduler.runner import SyncScheduler
 
-        SyncScheduler(Ingestor(zs), None, renew=lambda: Ingestor(zs)).start()
+        scheduler = SyncScheduler(Ingestor(zs), None, renew=lambda: Ingestor(zs))
+        scheduler.start()
     if not http:
         _serve_stdio(zs)
         return
 
-    from zerostore.mcp.http import create_http_app
-
     host = host or zs.config.servers.host
     port = port or zs.config.servers.port
     _check_bind(host, tls_cert, tls_key, behind_https_proxy)
-    import uvicorn
-
     scheme = "https" if tls_cert else "http"
     base = (public_url or f"{scheme}://{_url_host(host)}:{port}").rstrip("/")
     typer.echo(f"ZeroStore MCP server on {base}/mcp", err=True)
@@ -243,21 +241,53 @@ def serve(
             # A sign-in code is made only when asked for, so none sits in service logs.
             threading.Timer(1.0, webbrowser.open, args=(_login_link(zs, config_path, base),)).start()
         typer.echo(f"Web UI: {base}  (`zerostore ui` opens it signed in)", err=True)
-    uvicorn.run(
-        create_http_app(
-            zs,
-            host=host,
-            config_path=config_path,
-            mcp_url=f"{base}/mcp",
-            behind_proxy=behind_https_proxy,
-            scheduled=schedule,
-        ),
-        host=host,
-        port=port,
-        ssl_certfile=str(tls_cert) if tls_cert else None,
-        ssl_keyfile=str(tls_key) if tls_key else None,
-        log_level="warning",
+    from zerostore.services import Heartbeat, Here
+
+    here = Here(
+        web=bool(zs.config.web_ui), mcp_url=f"{base}/mcp", scheduler=scheduler.alive if scheduler else None
     )
+    heartbeat = Heartbeat(zs, here, base).start()  # lets `zerostore status` see the four parts
+    try:
+        _run_http(
+            zs, host, port, config_path, base, behind_https_proxy, scheduler, tls_cert, tls_key, heartbeat
+        )
+    finally:
+        heartbeat.stop()
+
+
+def _run_http(
+    zs, host, port, config_path, base, behind_https_proxy, scheduler, tls_cert, tls_key, heartbeat
+) -> None:
+    import uvicorn
+
+    from zerostore.mcp.http import create_http_app
+
+    class Server(uvicorn.Server):
+        # uvicorn re-raises SIGTERM after shutting down, which ends the process before any
+        # `finally` runs, so the heartbeat is marked stopped here instead.
+        async def shutdown(self, sockets=None) -> None:
+            await super().shutdown(sockets)
+            heartbeat.stop()
+
+    app_ = create_http_app(
+        zs,
+        host=host,
+        config_path=config_path,
+        mcp_url=f"{base}/mcp",
+        behind_proxy=behind_https_proxy,
+        scheduled=scheduler is not None,
+        scheduler_alive=scheduler.alive if scheduler else None,
+    )
+    Server(
+        uvicorn.Config(
+            app_,
+            host=host,
+            port=port,
+            ssl_certfile=str(tls_cert) if tls_cert else None,
+            ssl_keyfile=str(tls_key) if tls_key else None,
+            log_level="warning",
+        )
+    ).run()
 
 
 WEB_URL_KEY = "web_url"  # where `serve --http` last said the web UI is
@@ -607,7 +637,9 @@ def status(
     as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
     config: Path = ConfigOption,
 ) -> None:
-    """Show what ZeroStore holds and what's waiting for you."""
+    """Show what ZeroStore holds, what's waiting for you, and whether its four services are up."""
+    from zerostore.services import check
+
     zs = _open(config)
     cfg: Config = zs.config
     info = {
@@ -623,6 +655,7 @@ def status(
         "last_sync": _last_sync(zs),
         "fact_store": cfg.servers.vectordb_uri(),
         "state_db": str(cfg.servers.statedb_path()),
+        "services": check(zs),
     }
     if as_json:
         typer.echo(json.dumps(info, indent=2))
@@ -638,6 +671,11 @@ def status(
     last = info["last_sync"]
     typer.echo(f"  Last sync:        {last['finished_at'] + ' · ' + last['summary'] if last else 'never'}")
     typer.echo(f"  Fact store:       {info['fact_store']}")
+    typer.echo("Services")
+    for part in info["services"]:
+        mark = {"running": "●", "off": "○"}.get(part["state"], "▲")
+        where = f"  {part['address']}" if part["address"] != "-" else ""
+        typer.echo(f"  {mark} {part['name']:<16}{part['state']:<9}{part['detail']}{where}")
 
 
 def _engine_label(cfg: Config) -> str:

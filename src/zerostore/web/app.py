@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from zerostore import __version__
+from zerostore import __version__, services
 from zerostore.access.oauth import APPROVE_PATH, ApprovalError, ConnectorAuth
 from zerostore.access.roles import role_problem
 from zerostore.agents import commands as agent_commands
@@ -213,6 +213,7 @@ def create_web_app(
     mcp_url: str | None = None,
     behind_proxy: bool = False,
     scheduled: bool = True,
+    scheduler_alive: Callable[[], bool] | None = None,
     google_http: Callable[[], httpx.Client] | None = None,
     connectors: ConnectorAuth | None = None,
 ) -> FastAPI:
@@ -221,6 +222,7 @@ def create_web_app(
     `behind_proxy`: a reverse proxy in front forwards requests, so the Host header
     may be the public name and the public origin comes from X-Forwarded-Host.
     `scheduled`: this process runs timed syncs (shown on the status page).
+    `scheduler_alive`: whether the timed-sync thread still runs (for the services table).
     `google_http`: makes the HTTP client for talking to Google (tests pass a fake one).
     `connectors`: the sign-in for Claude's connectors, which asks the owner on /connect/approve.
     """
@@ -234,6 +236,9 @@ def create_web_app(
     sessions = auth.Sessions()
     owner = OwnerClient(zs)
     syncer = SyncRunner(owner)
+    here = services.Here(
+        web=True, mcp_url=mcp_url, scheduler=(scheduler_alive or (lambda: True)) if scheduled else None
+    )
     loopback_only = _is_loopback(bound_host) and not behind_proxy
     failures = auth.FailedSignIns()
     app.state.sessions = sessions
@@ -419,6 +424,7 @@ def create_web_app(
             figures=figures,
             **syncer.snapshot(),
             scheduled=scheduled,
+            services=await anyio.to_thread.run_sync(services.check, zs, here),
         )
 
     @app.post("/sync")
@@ -503,7 +509,7 @@ def create_web_app(
             tokens=tokens,
             tag_counts=status.get("tags", {}),
             me=caller.id,
-            servers=_servers(zs, bound_host, mcp_url),
+            servers=await anyio.to_thread.run_sync(lambda: [*services.check(zs, here), _state_db(zs)]),
         )
 
     @app.post("/settings")
@@ -922,13 +928,11 @@ def _is_loopback(host: str) -> bool:
     return is_loopback(host)
 
 
-def _servers(zs: ZeroStore, host: str, mcp_url: str | None) -> list[dict[str, str]]:
-    cfg = zs.config
-    web = mcp_url[: -len("/mcp")] if mcp_url and mcp_url.endswith("/mcp") else f"http://{host}"
-    return [
-        {"name": "web UI", "where": "this process", "address": web},
-        {"name": "mcp server", "where": "this process", "address": mcp_url or "stdio"},
-        {"name": "librarian", "where": "inside zerostore", "address": f"syncs on '{cfg.sync.schedule}'"},
-        {"name": "vector db", "where": "lancedb", "address": cfg.servers.vectordb},
-        {"name": "state db", "where": "sqlite", "address": cfg.servers.statedb},
-    ]
+def _state_db(zs: ZeroStore) -> dict[str, str]:
+    """The SQLite file next to the four services: tokens, review queue, audit log."""
+    return {
+        "name": "state db",
+        "state": services.RUNNING,
+        "detail": "tokens, review queue, audit log",
+        "address": str(zs.config.servers.statedb_path()),
+    }
