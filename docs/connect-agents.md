@@ -42,6 +42,14 @@ zerostore service install --behind-https-proxy --public-url https://zs.example.c
 
 It keeps listening on `localhost` only. The setup page now shows the address to paste.
 
+Before adding it to an app, check it the way the app will reach it:
+
+```bash
+zerostore doctor --url https://zs.example.com
+```
+
+It calls the public address with only the public certificate authorities, as ChatGPT, Grok and Claude do. It catches a self-signed certificate or private `root.crt`, a server started without `--public-url`, and connector sign-in being off. Each problem comes with the one thing to change. It also checks your sources' keys, the four services, and whether every tag has a role that can see it. It exits with 1 while anything needs fixing, so scripts can run it too.
+
 ### 2. Add it in the app
 
 Each app sends you to a ZeroStore page that asks "Let <app> use your ZeroStore?". Sign in if asked, pick the access level and role, and click Allow. The app gets its own token, shown in Settings as "<app> (connector)". Revoke that token to disconnect it.
