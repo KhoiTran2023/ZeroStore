@@ -60,6 +60,7 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Claude's connectors (after stage 8): ZeroStore can be added under Claude's Settings, Connectors with its `https://<address>/mcp`; the owner allows it on the web UI and it gets its own token.
 - Roles and tags: information is tagged by where it lives, roles list the tags they see, and every token or connector can have a role; edited on the settings page or in zerostore.yaml.
 - Four services (after Khoi's goal): one program runs the web console, MCP server, vector DB and ingestion agent; `services.py` checks each (the server writes a heartbeat to the state file every 15 s), shown on the settings and status pages and in `zerostore status`. A real sync of the KhoiTran2023/ZeroStore repo with an `engineering` tag was checked by hand: a token without the role saw nothing, one with it saw the docs. Google Drive was not checked for real (no Google credentials here).
+- `zerostore doctor` (Oct 17, Khoi said yes): checks keys, services, the public address as connectors reach it (public CAs only, so a self-signed cert or root.crt fails), the sign-in naming the right address, and roles; exit 1 on a problem. PRs #12 and #13 merged into their stack branches, so #14 carried them to main.
 - Khoi's goal (Oct 17): agents (Claude, Grok, ChatGPT) connect with no certificate steps and call ZeroStore without being told; ingestion from Google Drive and GitHub; the web console, MCP server, vector DB and ingestion agent all up; docs with setup steps and behaviour changes; only authorised agents may call, and roles set in the web UI decide what each sees, matching the technical config. Done so far: roles and tags; ChatGPT and Grok sign-in; the setup guide (docs/connect-agents.md); the four services' health; a real GitHub ingestion check; CHANGELOG.md for behaviour changes. Still to do: a real Google Drive check, which needs Google credentials. Khoi was asked whether the four services run as one program (recommended) or separately.
 - `zerostore report`: the spec and plan (Oct 13) say the stale-facts report was dropped, though the spec's CLI list still names `report`; Khoi was asked whether to drop it, build a what-changed report, or build the stale-facts card.
 
@@ -89,9 +90,10 @@ ZeroStore/
 │   ├── __init__.py           Version
 │   ├── app.py                Opens config, state, tokens and fact store together; picks the embedder
 │   ├── __main__.py           `python -m zerostore`, which the background service runs
-│   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, connect, demo, service
+│   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, doctor, connect, demo, service
 │   ├── config.py             Reads and checks zerostore.yaml (env-var and secrets.env expansion, defaults, clear errors)
 │   ├── insights.py           Read-only numbers for the status page and the status/activity tools
+│   ├── doctor.py             `zerostore doctor`: checks keys, services, the public address, certificate, sign-in and roles, with fixes
 │   ├── services.py           The four services (web console, MCP server, vector DB, ingestion agent): health checks and the server heartbeat
 │   ├── service.py            `zerostore service`: the systemd unit or launchd agent that keeps `serve --http` running
 │   ├── access/
@@ -150,8 +152,8 @@ ZeroStore/
                               judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI,
                               service and install.sh (faked service manager), Sign in with Google (fake Google),
                               connect commands (started with a short PATH, as Claude Desktop does), the connector
-                              sign-in (with the MCP SDK's OAuth client), roles and tags, service health; servers.py runs a real server
-                              on a free port
+                              sign-in (with the MCP SDK's OAuth client), roles and tags, service health, doctor (with a self-signed HTTPS server); servers.py runs a real server
+                              (HTTP or HTTPS) on a free port
 ```
 
 ## What each folder contains

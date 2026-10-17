@@ -6,6 +6,17 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### `zerostore doctor`
+
+- New command that checks everything an agent needs before you add ZeroStore to it: source keys and
+  credentials, the four services, the address agents use, its certificate, connector sign-in, and
+  whether every tag has a role that can see it.
+- It calls the address the way ChatGPT, Grok and Claude do, trusting only public certificate
+  authorities. It catches a self-signed certificate or private `root.crt`, plain HTTP on a network
+  address, and a server started without `--public-url` (the sign-in would name the wrong address).
+- Each problem comes with the one thing to change. It exits with 1 while any problem is left, and
+  `--json` prints the checks for scripts. `--url` checks an address other than where the server runs.
+
 ### Service health for the four parts
 
 - `zerostore serve --http` runs the four parts in one program: the web console, the MCP server, the

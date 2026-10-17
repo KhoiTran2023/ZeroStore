@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, remembered keep answers so edits to long documents cost less, connectors for Claude, ChatGPT and Grok, roles and tags, and live health for the four services. See [CHANGELOG.md](CHANGELOG.md) for what changed in each step.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, remembered keep answers so edits to long documents cost less, connectors for Claude, ChatGPT and Grok, roles and tags, live health for the four services, and `zerostore doctor`. See [CHANGELOG.md](CHANGELOG.md) for what changed in each step.
 
 ## Install
 
@@ -208,6 +208,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore reindex` | Rebuilds the fact store from your sources (for example after switching embeddings) |
 | `zerostore token create / list / role / revoke` | Manages access tokens and their roles |
 | `zerostore status` | Shows what ZeroStore holds, what waits for review, and whether the four services are up |
+| `zerostore doctor` | Checks everything an agent needs (keys, services, the public address, its certificate and sign-in, roles) and says how to fix what's wrong |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
 | `zerostore service install / status / uninstall` | Keeps `zerostore serve --http` running in the background (systemd or launchd) |
 | `zerostore demo` | Plays the Pebble & Co. story; `demo start`, `change-price`, `add-note` and `remove` step through it |

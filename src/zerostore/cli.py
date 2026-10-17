@@ -678,6 +678,44 @@ def status(
         typer.echo(f"  {mark} {part['name']:<16}{part['state']:<9}{part['detail']}{where}")
 
 
+@app.command()
+def doctor(
+    url: str = typer.Option(
+        None, help="The address agents use, e.g. https://zs.example.com (default: where the server runs)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    config: Path = ConfigOption,
+) -> None:
+    """Check everything an agent needs before you add ZeroStore to it, and say how to fix what's wrong."""
+    from zerostore.doctor import FAIL, WARN, run
+
+    zs = _open(config)
+    checks = run(zs, resolve_config_path(config), url)
+    if as_json:
+        typer.echo(json.dumps([c.as_dict() for c in checks], indent=2))
+    else:
+        group = None
+        for c in checks:
+            if c.group != group:
+                group = c.group
+                typer.echo(group.capitalize())
+            mark = {WARN: "!", FAIL: "✗"}.get(c.level, "✓")
+            typer.echo(f"  {mark} {c.says}")
+            if c.fix:
+                typer.echo(f"      → {c.fix}")
+        failed = sum(c.level == FAIL for c in checks)
+        warned = sum(c.level == WARN for c in checks)
+        typer.echo(
+            "All set: add ZeroStore to your agents (docs/connect-agents.md)."
+            if not failed
+            else f"{failed} problem{'s' if failed != 1 else ''} to fix first."
+        )
+        if warned:
+            typer.echo(f"{warned} note{'s' if warned != 1 else ''} worth a look.")
+    if any(c.level == FAIL for c in checks):
+        raise typer.Exit(1)
+
+
 def _engine_label(cfg: Config) -> str:
     from zerostore.insights import engine_label
 

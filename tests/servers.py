@@ -13,16 +13,25 @@ from starlette.types import ASGIApp
 
 
 @contextmanager
-def running(app: ASGIApp | None = None, *, build: Callable[[str], ASGIApp] | None = None) -> Iterator[str]:
-    """Serve `app`, or `build(mcp_url)` when the app needs to know its own address."""
+def running(
+    app: ASGIApp | None = None,
+    *,
+    build: Callable[[str], ASGIApp] | None = None,
+    tls: tuple[str, str] | None = None,
+) -> Iterator[str]:
+    """Serve `app`, or `build(mcp_url)` when the app needs to know its own address.
+
+    `tls` is a (certificate, key) pair of files, to serve HTTPS.
+    """
     # The socket is bound here and handed to uvicorn, so no other server can take the port
     # between choosing it and listening on it.
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    url = f"http://127.0.0.1:{port}/mcp"
+    url = f"{'https' if tls else 'http'}://127.0.0.1:{port}/mcp"
     app = build(url) if build else app
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    https = {"ssl_certfile": tls[0], "ssl_keyfile": tls[1]} if tls else {}
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", **https))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     deadline = time.time() + 10
