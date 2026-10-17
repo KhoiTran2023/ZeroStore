@@ -28,19 +28,29 @@ These apps connect from their makers' servers, so ZeroStore needs a public HTTPS
 
 ### 1. Give ZeroStore a public HTTPS address
 
-Use something that gets a certificate every computer already trusts:
+This is the same setup as any website: a domain name, a DNS record, and a free certificate from Let's Encrypt. There's no certificate to install on anyone's computer, and a bare IP address won't work, because public certificates are issued for names.
 
-- **Cloudflare Tunnel:** run `cloudflared tunnel` pointed at `http://localhost:8765`. You get your own domain and open no ports.
-- **Caddy:** add `zs.example.com { reverse_proxy localhost:8765 }`. You need port 443 open.
-- **Tailscale Funnel:** run `tailscale funnel 8765`. Plain `tailscale serve` is private to your tailnet, so these apps can't reach it.
+**On a server (AWS EC2 or any cloud VM, Linux):**
 
-Then run ZeroStore behind it:
+1. Point a domain name at the server. Add an **A record** such as `zs.example.com` with the server's public IP address. That's in Route 53 on AWS, or wherever your domain's DNS is. On AWS, attach an **Elastic IP** first so the address doesn't change.
+2. Open ports **80 and 443** to everyone, in the instance's security group on AWS. Let's Encrypt checks the domain on port 80.
+3. Install with the domain:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --domain zs.example.com
+   ```
+
+The installer checks the DNS record and installs Caddy from its official packages (apt or dnf, which needs sudo). It adds the domain to `/etc/caddy/Caddyfile`, and starts ZeroStore at `https://zs.example.com` on `localhost` behind Caddy. Caddy gets the certificate and renews it. The installer then runs `zerostore doctor` to check the address the way agents reach it.
+
+**Behind a load balancer or proxy you already run** (an AWS Application Load Balancer with an ACM certificate, nginx, Cloudflare): send its traffic to port 8765, then start ZeroStore with the address people use:
 
 ```bash
 zerostore service install --behind-https-proxy --public-url https://zs.example.com
 ```
 
-It keeps listening on `localhost` only. The setup page now shows the address to paste.
+Add `--host 0.0.0.0` only when the proxy runs on another machine, such as a load balancer. Then let only the load balancer reach port 8765.
+
+**On your own computer, with no domain:** a tunnel gives it a public HTTPS name. Use `tailscale funnel 8765` for a fixed `*.ts.net` address, or a Cloudflare Tunnel with your domain. Then run the `service install` line above with that address.
 
 Before adding it to an app, check it the way the app will reach it:
 

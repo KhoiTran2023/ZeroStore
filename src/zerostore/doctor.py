@@ -9,6 +9,7 @@ self-signed certificate or a private `root.crt` shows up here first.
 from __future__ import annotations
 
 import re
+import socket
 import ssl
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -172,13 +173,16 @@ def known_address(zs: ZeroStore) -> str | None:
     return beat.get("base") if beat else None
 
 
-def _is_cert_error(exc: Exception) -> bool:
+def _caused_by(exc: BaseException, kind: type[BaseException], text: str = "") -> bool:
     seen: BaseException | None = exc
     while seen is not None:
-        if isinstance(seen, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(seen):
+        if isinstance(seen, kind) or (text and text in str(seen)):
             return True
         seen = seen.__cause__ or seen.__context__
     return False
+
+
+DOMAIN_FIX = "point a domain name at this server, then install with --domain <name> (docs/connect-agents.md)"
 
 
 def _address(base: str | None, client: httpx.Client) -> list[Check]:
@@ -216,8 +220,7 @@ def _address(base: str | None, client: httpx.Client) -> list[Check]:
                 group,
                 FAIL,
                 f"{base} is plain HTTP on a network address; connectors refuse it",
-                "put HTTPS with a public certificate in front, then serve with "
-                "--behind-https-proxy --public-url https://...",
+                DOMAIN_FIX,
             )
         )
         return out
@@ -225,14 +228,23 @@ def _address(base: str | None, client: httpx.Client) -> list[Check]:
     try:
         mcp = client.get(f"{base}/mcp", headers={"Accept": "application/json, text/event-stream"})
     except httpx.HTTPError as exc:
-        if _is_cert_error(exc):
+        if _caused_by(exc, ssl.SSLCertVerificationError, "CERTIFICATE_VERIFY_FAILED"):
             out.append(
                 Check(
                     group,
                     FAIL,
                     "the certificate isn't from a public authority (self-signed or a private root.crt), "
                     "and agents can't be told to trust it",
-                    "use a public certificate: Caddy with Let's Encrypt, a tunnel, or a cloud load balancer",
+                    f"get a Let's Encrypt certificate: {DOMAIN_FIX}",
+                )
+            )
+        elif _caused_by(exc, socket.gaierror):
+            out.append(
+                Check(
+                    group,
+                    FAIL,
+                    f"{parts.hostname} has no DNS record, so no agent can find it",
+                    "add an A record pointing at the server's public IP address (an Elastic IP on AWS)",
                 )
             )
         else:

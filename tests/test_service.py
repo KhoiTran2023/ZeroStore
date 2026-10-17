@@ -436,7 +436,7 @@ esac
 """
 
 
-def run_installer(tmp_path, **env) -> tuple[subprocess.CompletedProcess, list[str]]:
+def run_installer(tmp_path, *args: str, **env) -> tuple[subprocess.CompletedProcess, list[str]]:
     fakes = tmp_path / "fakes"
     fakes.mkdir(exist_ok=True)
     (fakes / "uv").write_text(FAKE_UV)
@@ -451,7 +451,9 @@ def run_installer(tmp_path, **env) -> tuple[subprocess.CompletedProcess, list[st
         "ZEROSTORE_PACKAGE": "/src/zerostore",
         **env,
     }
-    result = subprocess.run(["sh", str(ROOT / "install.sh")], capture_output=True, text=True, env=full_env)
+    result = subprocess.run(
+        ["sh", str(ROOT / "install.sh"), *args], capture_output=True, text=True, env=full_env
+    )
     return result, log.read_text().splitlines()
 
 
@@ -495,6 +497,105 @@ def test_installer_refuses_other_systems(tmp_path):
     result, calls = run_installer(tmp_path)
     assert result.returncode == 1
     assert "this installer is for Linux and macOS" in result.stderr
+    assert calls == []
+
+
+# --- install.sh --domain: HTTPS with Caddy and Let's Encrypt, system tools faked ---
+
+LOGGED = '#!/bin/sh\necho "{name} $*" >> "$LOG"\n'
+DOMAIN_FAKES = {
+    "id": "#!/bin/sh\necho 1000\n",  # not root, so every system change goes through sudo
+    "sudo": '#!/bin/sh\necho "sudo $*" >> "$LOG"\nexec "$@"\n',
+    "getent": '#!/bin/sh\n[ -n "$FAKE_DNS" ] && echo "$FAKE_DNS STREAM $2"\nexit 0\n',
+    "curl": '#!/bin/sh\necho "curl $*" >> "$LOG"\ncase "$*" in *checkip*) echo 203.0.113.7 ;; esac\n',
+    "systemctl": LOGGED.format(name="systemctl"),
+    "gpg": LOGGED.format(name="gpg"),
+    # Writes only inside the test's home; elsewhere (/etc/apt) it just records the call.
+    "tee": '#!/bin/sh\necho "tee $*" >> "$LOG"\nfor last; do :; done\n'
+    'case "$last" in "$HOME"/*) exec /usr/bin/tee "$@" ;; *) cat > /dev/null ;; esac\n',
+}
+
+
+def domain_fakes(tmp_path, *, caddy: bool) -> dict[str, str]:
+    fakes = tmp_path / "fakes"
+    fakes.mkdir(exist_ok=True)
+    tools = dict(DOMAIN_FAKES)
+    caddy_fake = LOGGED.format(name="caddy")
+    if caddy:
+        tools["caddy"] = caddy_fake
+    else:  # apt-get installs it
+        tools["apt-get"] = (
+            LOGGED.format(name="apt-get")
+            + f'if [ "$*" = "install -y caddy" ]; then printf \'%s\' \'{caddy_fake}\' > "{fakes}/caddy";'
+            f' chmod +x "{fakes}/caddy"; fi\n'
+        )
+    for name, text in tools.items():
+        (fakes / name).write_text(text)
+        (fakes / name).chmod(0o755)
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(":80 {\n\troot * /usr/share/caddy\n\tfile_server\n}\n")
+    return {"ZEROSTORE_CADDYFILE": str(caddyfile), "ZEROSTORE_NO_OPEN": "1", "FAKE_DNS": "203.0.113.7"}
+
+
+@needs_sh
+def test_installer_serves_a_domain_over_https_with_caddy(tmp_path):
+    env = domain_fakes(tmp_path, caddy=True)
+    result, calls = run_installer(tmp_path, "--domain", "zs.example.com", **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "zs.example.com points at this server (203.0.113.7)." in result.stdout
+    caddyfile = (tmp_path / "Caddyfile").read_text()
+    assert "zs.example.com {\n\treverse_proxy localhost:8765\n}" in caddyfile
+    assert caddyfile.startswith(":80 {")  # the existing site is kept
+    assert "sudo systemctl reload-or-restart caddy" in calls
+    assert not any(c.startswith("apt-get") for c in calls)  # Caddy was already here
+    zs = [c for c in calls if c.startswith("zerostore")]
+    assert zs[2] == (
+        "zerostore service install --port 8765 --behind-https-proxy --public-url https://zs.example.com"
+    )
+    assert "zerostore doctor --url https://zs.example.com" in zs
+    assert "Agents add ZeroStore with https://zs.example.com/mcp" in result.stdout
+
+    # Running it again doesn't add the site twice.
+    again, _ = run_installer(tmp_path, "--domain=zs.example.com", **env)
+    assert again.returncode == 0, again.stderr
+    assert (tmp_path / "Caddyfile").read_text().count("zs.example.com {") == 1
+    assert "Caddy already serves zs.example.com" in again.stdout
+
+
+@needs_sh
+def test_installer_installs_caddy_from_its_apt_repository(tmp_path):
+    env = domain_fakes(tmp_path, caddy=False)
+    result, calls = run_installer(tmp_path, "--domain", "zs.example.com", **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "sudo apt-get install -y caddy" in calls
+    assert any("dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" in c for c in calls)
+    assert "sudo tee /etc/apt/sources.list.d/caddy-stable.list" in calls
+    installed, reloaded = "sudo apt-get install -y caddy", "sudo systemctl reload-or-restart caddy"
+    assert calls.index(installed) < calls.index(reloaded)
+
+
+@needs_sh
+def test_installer_stops_when_the_domain_has_no_dns_record(tmp_path):
+    env = {**domain_fakes(tmp_path, caddy=True), "FAKE_DNS": ""}
+    result, calls = run_installer(tmp_path, "--domain", "zs.example.com", **env)
+    assert result.returncode == 1
+    assert "zs.example.com has no DNS record yet. Add an A record" in result.stderr
+    assert not any(c.startswith("zerostore service") or c.startswith("caddy") for c in calls)
+
+
+@needs_sh
+def test_installer_notes_a_domain_pointing_elsewhere(tmp_path):
+    env = {**domain_fakes(tmp_path, caddy=True), "FAKE_DNS": "198.51.100.9"}
+    result, _ = run_installer(tmp_path, "--domain", "zs.example.com", **env)
+    assert result.returncode == 0, result.stderr
+    assert "points at 198.51.100.9" in result.stdout and "public address is 203.0.113.7" in result.stdout
+
+
+@needs_sh
+@pytest.mark.parametrize("bad", ["https://zs.example.com", "zs.example.com:443", "zs.example.com/mcp"])
+def test_installer_wants_just_the_domain_name(tmp_path, bad):
+    result, calls = run_installer(tmp_path, "--domain", bad)
+    assert result.returncode == 1 and "just the name" in result.stderr
     assert calls == []
 
 

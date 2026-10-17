@@ -138,7 +138,7 @@ def test_a_server_started_without_its_public_name_is_caught(demo):
 def test_plain_http_on_a_network_address_fails(demo):
     _, zs = demo
     [first] = [c for c in run(zs, url="http://10.0.0.5:8765") if c.group == "address"]
-    assert first.level == FAIL and "--behind-https-proxy" in first.fix
+    assert first.level == FAIL and "--domain" in first.fix
 
 
 @pytest.fixture
@@ -172,7 +172,7 @@ def test_a_self_signed_certificate_is_the_root_crt_problem(demo, self_signed):
     with running(build=build, tls=self_signed) as url:
         checks = run(zs, url=url.removesuffix("/mcp"), client=httpx.Client(timeout=5))
     [problem] = problems(checks)
-    assert "root.crt" in problem.says and "public certificate" in problem.fix
+    assert "root.crt" in problem.says and "--domain" in problem.fix
 
 
 # The command ----------------------------------------------------------------------
@@ -188,3 +188,12 @@ def test_the_command_exits_1_on_a_problem_and_prints_json(demo):
     as_json = runner.invoke(app, ["doctor", "--json", "-c", str(d.config_path)])
     rows = json.loads(as_json.output)
     assert {"group", "level", "says", "fix"} <= set(rows[0])
+
+
+def test_a_domain_with_no_dns_record_says_so(demo):
+    _, zs = demo
+    # .invalid never resolves (RFC 2606), so this needs no network.
+    # No proxy either: a proxy would resolve the name itself and answer with its own error.
+    checks = run(zs, url="https://zs.example.invalid", client=httpx.Client(timeout=5, trust_env=False))
+    [problem] = problems(checks)
+    assert "has no DNS record" in problem.says and "A record" in problem.fix
