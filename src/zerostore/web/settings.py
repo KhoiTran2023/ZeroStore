@@ -282,6 +282,9 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
         if schedule:
             _map(doc, "sync")["schedule"] = schedule
 
+    if "access" in sections:
+        _apply_access(doc, form)
+
     out = io.StringIO()
     y.dump(doc, out)
     text = out.getvalue()
@@ -289,6 +292,58 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
     save_secrets(path, found)
     _write(path, text)
     return config
+
+
+PLACE_KINDS = {"google_drive": "Drive folder", "github": "GitHub repo", "linear_label": "Linear label"}
+CONFIDENTIAL = "confidential"
+
+
+def access_rows(config: Config) -> dict[str, list[dict[str, str]]]:
+    """Tags and roles as the form's rows: one row per place, one per role."""
+    rules = [(CONFIDENTIAL, r) for r in config.confidential]
+    rules += [(tag, r) for tag, places in config.tags.items() for r in places]
+    places = []
+    for tag, rule in rules:
+        kind = next(k for k in PLACE_KINDS if getattr(rule, k))
+        places.append({"tag": tag, "kind": kind, "place": getattr(rule, kind)})
+    roles = [{"name": name, "tags": ", ".join(tags)} for name, tags in config.roles.items()]
+    return {"places": places, "roles": roles}
+
+
+def _apply_access(doc: CommentedMap, form: Mapping[str, str]) -> None:
+    """Rows of the "who sees what" form back into the confidential:, tags: and roles: settings."""
+    confidential: list[CommentedMap] = []
+    tags: dict[str, list[CommentedMap]] = {}
+    for i in _row_numbers(form, "place_"):
+        tag = (form.get(f"tag_{i}") or "").strip().lower()
+        kind = form.get(f"kind_{i}") or ""
+        place = (form.get(f"place_{i}") or "").strip()
+        if not place and not tag:
+            continue  # an empty row
+        if not tag or not place:
+            raise SettingsError("each place needs both a tag and a folder, repo or label")
+        if kind not in PLACE_KINDS:
+            raise SettingsError(f"pick a Drive folder, GitHub repo or Linear label for {place}")
+        rule = CommentedMap({kind: _plain(place)})
+        (confidential if tag == CONFIDENTIAL else tags.setdefault(tag, [])).append(rule)
+    roles = CommentedMap()
+    for i in _row_numbers(form, "role_"):
+        name = (form.get(f"role_{i}") or "").strip().lower()
+        if not name:
+            continue
+        if name in roles:
+            raise SettingsError(f"the role {name} is listed twice")
+        roles[name] = _flow([t.lower() for t in _split(form.get(f"role_tags_{i}", ""))])
+    for key, value in (("confidential", confidential), ("tags", CommentedMap(tags)), ("roles", roles)):
+        if value:
+            doc[key] = value
+        else:
+            doc.pop(key, None)
+
+
+def _row_numbers(form: Mapping[str, str], prefix: str) -> list[int]:
+    found = {int(k[len(prefix) :]) for k in form if k.startswith(prefix) and k[len(prefix) :].isdigit()}
+    return sorted(found)
 
 
 def update_drive(
@@ -347,4 +402,6 @@ def form_values(path: Path) -> dict[str, Any]:
         "schedules": SCHEDULES,
         "engine_choices": ENGINE_CHOICES,
         "rerank_choices": RERANK_CHOICES,
+        "access": access_rows(config),
+        "place_kinds": PLACE_KINDS,
     }

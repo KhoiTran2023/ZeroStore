@@ -29,6 +29,7 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field, create_model
 
 from zerostore import __version__
+from zerostore.access.roles import hidden_tags, key_tags, role_problem
 from zerostore.access.tokens import AccessLevel, TokenError, TokenInfo
 from zerostore.app import ZeroStore
 from zerostore.decisions.select import Engines
@@ -132,6 +133,7 @@ def tools_for(level: AccessLevel) -> set[str]:
             "token_create",
             "token_list",
             "token_revoke",
+            "token_set_role",
             "review_list",
             "review_decide",
             "sync_now",
@@ -191,6 +193,11 @@ def build_server(
     def authorize(ctx: Context, action: str, detail: str | None = None) -> TokenInfo:
         return authorize_logged(ctx, action, detail)[0]
 
+    def hidden(caller: TokenInfo) -> list[str]:
+        """The tags whose facts this caller's role doesn't cover."""
+        known = {t for key in zs.state.access_keys() for t in key_tags(key)}
+        return hidden_tags(zs.config, caller.role, owner=caller.level.is_owner, known=known)
+
     # Read tools -----------------------------------------------------------
 
     @register("search", d.SEARCH, read_only=True)
@@ -198,7 +205,9 @@ def build_server(
         caller, row = authorize_logged(ctx, "search", query[:200])
         started = time.perf_counter()
         try:
-            answer = retriever.answer(query, include_confidential=caller.level.sees_confidential)
+            answer = retriever.answer(
+                query, include_confidential=caller.level.sees_confidential, hidden_tags=hidden(caller)
+            )
         except EmbeddingError as exc:
             raise ToolError(f"search is unavailable right now: {exc}") from None
         finally:
@@ -214,7 +223,9 @@ def build_server(
     @register("get_fact", d.GET_FACT, read_only=True)
     def get_fact(id: str, ctx: Context) -> dict[str, Any]:
         caller = authorize(ctx, "get_fact", id)
-        row = zs.facts.get(id, include_confidential=caller.level.sees_confidential)
+        row = zs.facts.get(
+            id, include_confidential=caller.level.sees_confidential, hidden_tags=hidden(caller)
+        )
         if row is None:
             raise ToolError(f"no fact with id {id}")
         return _fact_view(row)
@@ -226,6 +237,7 @@ def build_server(
             parse_since(since),
             actions=FACT_ACTIONS,
             include_confidential=caller.level.sees_confidential,
+            hidden_tags=hidden(caller),
         )
         return {
             "changes": [
@@ -237,7 +249,10 @@ def build_server(
     @register("list_sources", d.LIST_SOURCES, read_only=True)
     def list_sources(ctx: Context) -> dict[str, Any]:
         caller = authorize(ctx, "list_sources")
-        return {"documents": zs.facts.sources(include_confidential=caller.level.sees_confidential)}
+        documents = zs.facts.sources(
+            include_confidential=caller.level.sees_confidential, hidden_tags=hidden(caller)
+        )
+        return {"documents": documents}
 
     # Agent tool -----------------------------------------------------------
 
@@ -309,13 +324,16 @@ def build_server(
     # Setup tools (owner) --------------------------------------------------
 
     @register("token_create", d.TOKEN_CREATE, read_only=False)
-    def token_create(name: str, level: AccessLevel, ctx: Context) -> dict[str, Any]:
-        authorize(ctx, "token_create", f"{name} ({level.value})")
+    def token_create(name: str, level: AccessLevel, ctx: Context, role: str | None = None) -> dict[str, Any]:
+        authorize(ctx, "token_create", f"{name} ({level.value}{f', role {role}' if role else ''})")
+        problem = None if level is AccessLevel.OWNER else role_problem(zs.config, role)
+        if problem:
+            raise ToolError(problem)
         try:
-            raw, info = zs.tokens.create(name, level)
+            raw, info = zs.tokens.create(name, level, role=role)
         except ValueError as exc:
             raise ToolError(str(exc)) from None
-        return {"id": info.id, "name": info.name, "level": info.level.value, "token": raw}
+        return {"id": info.id, "name": info.name, "level": info.level.value, "role": info.role, "token": raw}
 
     @register("token_list", d.TOKEN_LIST, read_only=True)
     def token_list(ctx: Context) -> dict[str, Any]:
@@ -326,12 +344,23 @@ def build_server(
                     "id": t.id,
                     "name": t.name,
                     "level": t.level.value,
+                    "role": t.role,
                     "created_at": t.created_at,
                     "last_used_at": t.last_used_at,
                 }
                 for t in zs.tokens.list()
             ]
         }
+
+    @register("token_set_role", d.TOKEN_SET_ROLE, read_only=False)
+    def token_set_role(id: str, ctx: Context, role: str | None = None) -> dict[str, Any]:
+        authorize(ctx, "token_set_role", f"{id} -> {role or 'no role'}")
+        problem = role_problem(zs.config, role)
+        if problem:
+            raise ToolError(problem)
+        if not zs.tokens.set_role(id, role):
+            raise ToolError(f"no active default or confidential token with id {id}")
+        return {"id": id, "role": role or None}
 
     @register("token_revoke", d.TOKEN_REVOKE, read_only=False)
     def token_revoke(id: str, ctx: Context) -> dict[str, Any]:

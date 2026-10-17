@@ -1,0 +1,37 @@
+{# Who sees what: tags by place, and roles that list the tags they see. Written to zerostore.yaml. #}
+{% set a = v.access %}
+<form method="post" action="/settings" class="stack">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="sections" value="access"><input type="hidden" name="version" value="{{ v.version }}">
+  <section class="box stack">
+    <h2 style="margin:0">who sees what · tags and roles</h2>
+    <p class="muted" style="margin:0">Tag information by where it lives. Every agent sees untagged information; a tagged document is shown only to tokens whose role has all of its tags. The tag <b>confidential</b> is special: default tokens never see it, whatever their role. Owner tokens see everything.</p>
+    <div class="scroll"><table class="nowrap">
+      <thead><tr><th>tag</th><th>where</th><th>folder, repo or label</th><th>documents</th></tr></thead>
+      <tbody>
+        {% for p in a.places + [{}, {}, {}] %}
+        {% set n = loop.index0 %}{% set first_blank = not p and n == a.places|length %}
+        <tr>
+          <td><label class="sr" for="tag_{{ n }}">tag</label><input class="f m" id="tag_{{ n }}" type="text" name="tag_{{ n }}" value="{{ p.tag or '' }}" placeholder="{{ 'finance' if first_blank }}" style="width:9em"></td>
+          <td><label class="sr" for="kind_{{ n }}">where</label><select class="f" id="kind_{{ n }}" name="kind_{{ n }}">{% for k, label in v.place_kinds.items() %}<option value="{{ k }}"{% if p.kind == k %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></td>
+          <td><label class="sr" for="place_{{ n }}">folder, repo or label</label><input class="f m" id="place_{{ n }}" type="text" name="place_{{ n }}" value="{{ p.place or '' }}" placeholder="{{ 'Company/Finance' if first_blank }}"></td>
+          <td class="muted">{% if p.tag %}{{ tag_counts.get(p.tag, 0) }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="scroll"><table class="nowrap">
+      <thead><tr><th>role</th><th>sees these tags, besides untagged information</th><th>tokens</th></tr></thead>
+      <tbody>
+        {% for r in a.roles + [{}, {}] %}
+        {% set n = loop.index0 %}{% set first_blank = not r and n == a.roles|length %}
+        <tr>
+          <td><label class="sr" for="role_{{ n }}">role</label><input class="f m" id="role_{{ n }}" type="text" name="role_{{ n }}" value="{{ r.name or '' }}" placeholder="{{ 'sales' if first_blank }}" style="width:9em"></td>
+          <td><label class="sr" for="role_tags_{{ n }}">tags</label><input class="f m" id="role_tags_{{ n }}" type="text" name="role_tags_{{ n }}" value="{{ r.tags or '' }}" placeholder="{{ 'finance, sales' if first_blank }}"></td>
+          <td class="muted">{% if r.name %}{{ tokens|selectattr("role", "equalto", r.name)|list|length }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">saved as confidential:, tags: and roles: in zerostore.yaml · the next sync applies tags to your documents</span></div>
+  </section>
+</form>

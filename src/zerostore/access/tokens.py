@@ -6,6 +6,9 @@ Every request carries a token, and every token carries one access level:
 - `confidential`: sees everything; read tools + propose_fact.
 - `owner`: sees everything; read tools + setup tools; owns the review queue.
 
+A default or confidential token can also have a role, which decides which
+tagged information it sees (see roles.py).
+
 Tokens are long random strings shown once at creation. Only a SHA-256 hash is
 stored, which is safe for high-entropy secrets like these (no password
 stretching needed) and lets a lookup go straight to the matching row.
@@ -54,6 +57,7 @@ class TokenInfo:
     created_at: str
     revoked_at: str | None
     last_used_at: str | None
+    role: str | None = None
 
     @property
     def active(self) -> bool:
@@ -68,8 +72,12 @@ class TokenStore:
     def __init__(self, state: StateDB):
         self.state = state
 
-    def create(self, name: str, level: AccessLevel | str, *, raw: str | None = None) -> tuple[str, TokenInfo]:
+    def create(
+        self, name: str, level: AccessLevel | str, *, raw: str | None = None, role: str | None = None
+    ) -> tuple[str, TokenInfo]:
         """Create a token. Returns (raw token, info); the raw token is never stored.
+
+        `role` names a role from the settings (checked by the caller); owner tokens have none.
 
         `raw` re-registers a token made earlier (the demo keeps its agents' tokens
         across resets); it must look like one this method generates.
@@ -80,16 +88,21 @@ class TokenStore:
             raise ValueError("a token needs a name, e.g. cursor-laptop")
         if raw is not None and not (raw.startswith(TOKEN_PREFIX) and len(raw) >= 40):
             raise ValueError("not a ZeroStore token")
+        role = (role or "").strip() or None
+        if level is AccessLevel.OWNER:
+            role = None  # the owner sees everything
         token_id = secrets.token_hex(4)
         raw = raw or f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
         now = utcnow()
         with self.state.tx() as cur:
             cur.execute(
-                "INSERT INTO tokens (id, name, level, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (token_id, name, level.value, hash_token(raw), now),
+                "INSERT INTO tokens (id, name, level, token_hash, created_at, role)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (token_id, name, level.value, hash_token(raw), now, role),
             )
-        self.state.audit("token_created", detail=f"{token_id} ({name}, {level.value})")
-        return raw, TokenInfo(token_id, name, level, False, now, None, None)
+        detail = f"{token_id} ({name}, {level.value}{f', role {role}' if role else ''})"
+        self.state.audit("token_created", detail=detail)
+        return raw, TokenInfo(token_id, name, level, False, now, None, None, role)
 
     def verify(self, raw: str | None) -> TokenInfo:
         """Return the active token matching `raw`, or raise TokenError."""
@@ -125,6 +138,18 @@ class TokenStore:
             self.state.audit("token_revoked", detail=token_id)
         return changed
 
+    def set_role(self, token_id: str, role: str | None) -> bool:
+        """Give an agent token another role (None: untagged information only). Owner tokens have none."""
+        with self.state.tx() as cur:
+            cur.execute(
+                "UPDATE tokens SET role = ? WHERE id = ? AND revoked_at IS NULL AND level != 'owner'",
+                ((role or "").strip() or None, token_id),
+            )
+            changed = cur.rowcount == 1
+        if changed:
+            self.state.audit("token_role_set", detail=f"{token_id} -> {role or 'no role'}")
+        return changed
+
     def set_auto_approve(self, token_id: str, enabled: bool) -> bool:
         """Per-token auto-approve for agent proposals. Off by default; owner-only to change."""
         with self.state.tx() as cur:
@@ -144,4 +169,5 @@ def _info(row) -> TokenInfo:
         created_at=row["created_at"],
         revoked_at=row["revoked_at"],
         last_used_at=row["last_used_at"],
+        role=row["role"],
     )

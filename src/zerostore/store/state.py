@@ -10,13 +10,13 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Columns added after a table first shipped: (table, column, declaration).
 # CREATE TABLE IF NOT EXISTS leaves older files alone, so these are added on open.
@@ -25,6 +25,9 @@ _ADDED_COLUMNS = [
     ("documents", "rejected_fingerprint", "TEXT"),
     ("documents", "source_deleted_at", "TEXT"),
     ("access_log", "duration_ms", "INTEGER"),
+    ("documents", "access", "TEXT NOT NULL DEFAULT ''"),
+    ("tokens", "role", "TEXT"),
+    ("audit", "access", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 _SCHEMA = """
@@ -40,7 +43,8 @@ CREATE TABLE IF NOT EXISTS tokens (
     auto_approve INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     revoked_at TEXT,
-    last_used_at TEXT
+    last_used_at TEXT,
+    role TEXT
 );
 CREATE TABLE IF NOT EXISTS access_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +63,8 @@ CREATE TABLE IF NOT EXISTS audit (
     detail TEXT,
     confidence REAL,
     engine TEXT,
-    confidential INTEGER NOT NULL DEFAULT 0
+    confidential INTEGER NOT NULL DEFAULT 0,
+    access TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS review_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +96,8 @@ CREATE TABLE IF NOT EXISTS documents (
     chunks INTEGER NOT NULL DEFAULT 0,
     synced_at TEXT NOT NULL,
     rejected_fingerprint TEXT,
-    source_deleted_at TEXT
+    source_deleted_at TEXT,
+    access TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS judgments (
     engine TEXT NOT NULL,
@@ -227,8 +233,10 @@ class StateDB:
             "updated_at",
             "location",
             "confidential",
+            "access",
             "chunks",
         )
+        record = {"access": "", **record}  # changes queued before tags existed have none
         with self.tx() as cur:
             cur.execute(
                 f"INSERT INTO documents ({', '.join(cols)}, synced_at)"
@@ -238,6 +246,10 @@ class StateDB:
                 + ", synced_at = excluded.synced_at, rejected_fingerprint = NULL, source_deleted_at = NULL",
                 (*(record[c] for c in cols), utcnow()),
             )
+
+    def access_keys(self) -> set[str]:
+        """Every distinct access key on stored documents (see access/roles.py)."""
+        return {r["access"] for r in self.query("SELECT DISTINCT access FROM documents WHERE access != ''")}
 
     def touch_document(self, doc_id: str, version: str) -> None:
         """The item changed version but not content: remember the new version."""
@@ -355,13 +367,24 @@ class StateDB:
         confidence: float | None = None,
         engine: str | None = None,
         confidential: bool = False,
+        access: str = "",
         at: str | None = None,
     ) -> None:
         with self.tx() as cur:
             cur.execute(
-                "INSERT INTO audit (at, action, doc_id, source, detail, confidence, engine, confidential)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (at or utcnow(), action, doc_id, source, detail, confidence, engine, int(confidential)),
+                "INSERT INTO audit (at, action, doc_id, source, detail, confidence, engine, confidential,"
+                " access) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    at or utcnow(),
+                    action,
+                    doc_id,
+                    source,
+                    detail,
+                    confidence,
+                    engine,
+                    int(confidential),
+                    access,
+                ),
             )
 
     def audit_since(
@@ -370,9 +393,13 @@ class StateDB:
         *,
         actions: tuple[str, ...] | None = None,
         include_confidential: bool = True,
+        hidden_tags: Sequence[str] = (),
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """Audit rows at or after `since` (an ISO date or timestamp), newest first."""
+        """Audit rows at or after `since` (an ISO date or timestamp), newest first.
+
+        `hidden_tags` leaves out rows about documents carrying any of those tags.
+        """
         sql = (
             "SELECT at, action, doc_id, source, detail, confidence, engine, confidential"
             " FROM audit WHERE at >= ?"
@@ -383,6 +410,9 @@ class StateDB:
             params.extend(actions)
         if not include_confidential:
             sql += " AND confidential = 0"
+        for tag in hidden_tags:
+            sql += " AND instr(access, ?) = 0"
+            params.append(f",{tag},")
         rows = self.query(sql + " ORDER BY at DESC, id DESC LIMIT ?", (*params, limit))
         return [{**dict(r), "confidential": bool(r["confidential"])} for r in rows]
 

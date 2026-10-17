@@ -136,7 +136,8 @@
   <form method="post" action="/tokens" class="actions" style="align-items:end">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/setup?step=3">
     <label style="flex:1 1 200px"><span>Name</span><input class="f" type="text" name="name" value="claude-code" required></label>
-    <label><span>Access</span><select class="f" name="level"><option value="confidential">confidential (sees everything)</option><option value="default">default (no confidential facts)</option></select></label>
+    <label><span>Access</span><select class="f" name="level"><option value="confidential">confidential (sees confidential facts)</option><option value="default">default (no confidential facts)</option></select></label>
+    {% if roles %}{% set t = {} %}<label><span>Role</span><select class="f" name="role">{% include "_role_options.html" %}</select></label>{% endif %}
     <button class="btn go" type="submit">Connect to Claude</button>
   </form>
   <span class="cmd">creates a token and shows the line for Claude Code and the settings for Claude Desktop, Cursor and others · $ zerostore token create --name claude-code</span>

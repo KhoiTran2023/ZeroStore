@@ -8,7 +8,8 @@
 <form method="post" action="/connect/approve" class="stack" hx-boost="false">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <input type="hidden" name="request" value="{{ p.id }}">
-  <label><span>Access</span><select class="f" name="level"><option value="default">default (no confidential facts)</option><option value="confidential">confidential (sees everything)</option></select></label>
+  <label><span>Access</span><select class="f" name="level"><option value="default">default (no confidential facts)</option><option value="confidential">confidential (sees confidential facts)</option></select></label>
+  {% if roles %}{% set t = {} %}<label><span>Role <span class="hint">which tagged facts it sees</span></span><select class="f" name="role">{% include "_role_options.html" %}</select></label>{% endif %}
   <div class="actions"><button class="btn go" type="submit" name="answer" value="allow" autofocus>Allow</button><button class="btn" type="submit" name="answer" value="deny">Deny</button></div>
 </form>
 {% endblock %}

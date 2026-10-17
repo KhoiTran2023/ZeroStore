@@ -57,15 +57,18 @@
   </section>
   <div class="actions"><button class="btn go" type="submit">Save</button><span class="cmd">the same file the CLI reads</span></div>
 </form>
+{% include "_access.html" %}
 {% endif %}
 
 <section class="box stack">
   <div class="split"><h2 style="margin:0">tokens</h2><a class="btn small" href="/setup?step=3">Connect to Claude</a></div>
   <div class="scroll"><table class="nowrap">
-    <thead><tr><th>name</th><th>level</th><th>last seen</th><th><span class="sr">actions</span></th></tr></thead>
+    <thead><tr><th>name</th><th>level</th><th>role</th><th>last seen</th><th><span class="sr">actions</span></th></tr></thead>
     <tbody>
       {% for t in tokens %}
-      <tr><td>{{ t.name }}{% if t.id == me %} <span class="muted">(you, here)</span>{% endif %}</td><td>{{ t.level }}</td><td>{{ local_time(t.last_used_at) or "never" }}</td>
+      <tr><td>{{ t.name }}{% if t.id == me %} <span class="muted">(you, here)</span>{% endif %}</td><td>{{ t.level }}</td>
+        <td>{% if t.level == "owner" %}<span class="muted">sees everything</span>{% else %}<form method="post" action="/tokens/{{ t.id }}/role" class="actions" style="gap:4px;flex-wrap:nowrap"><input type="hidden" name="csrf" value="{{ csrf }}"><label class="sr" for="role-{{ t.id }}">role for {{ t.name }}</label><select class="f" id="role-{{ t.id }}" name="role">{% include "_role_options.html" %}</select><button class="btn small" type="submit">set</button></form>{% if t.role and t.role not in roles %}<span class="warn"> no role "{{ t.role }}" in the settings: sees untagged only</span>{% endif %}{% endif %}</td>
+        <td>{{ local_time(t.last_used_at) or "never" }}</td>
         <td style="text-align:right">{% if t.id != me %}<form method="post" action="/tokens/{{ t.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small" type="submit">revoke</button></form>{% endif %}</td></tr>
       {% endfor %}
     </tbody>
@@ -74,8 +77,9 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label style="flex:1 1 200px"><span>New token for</span><input class="f" type="text" name="name" placeholder="cursor-laptop" required></label>
     <label><span>Access</span><select class="f" name="level"><option value="default">default</option><option value="confidential">confidential</option><option value="owner">owner</option></select></label>
+    {% if roles %}{% set t = {} %}<label><span>Role</span><select class="f" name="role">{% include "_role_options.html" %}</select></label>{% endif %}
     <button class="btn" type="submit">New token</button>
   </form>
-  <span class="cmd">default never sees confidential facts · confidential sees everything · owner can also change settings and review</span>
+  <span class="cmd">default never sees confidential facts · confidential also sees them · a role adds its tagged facts · owner sees everything and can change settings and review · $ zerostore token create --name cursor --role sales</span>
 </section>
 {% endblock %}

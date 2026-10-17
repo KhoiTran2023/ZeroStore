@@ -66,6 +66,22 @@ confidential:
   - google_drive: "Company/Finance"
   - linear_label: "hr"
 
+# Optional: tag information by where it lives, and give each agent token a role
+# that lists the tags it may see. Untagged information is for every agent; a
+# document with several tags is shown only to roles that have all of them.
+# Edit these on the web UI's settings page ("who sees what") or here; give a
+# token its role with `zerostore token create --role sales` or in the token list.
+tags:
+  sales:
+    - google_drive: "Company/Sales"
+    - linear_label: "deals"
+  engineering:
+    - github: "acme/app"
+roles:
+  sales: [sales]
+  engineering: [engineering]
+  leadership: [sales, engineering]
+
 agent_proposals: true           # agents may propose facts for you to approve
 decisions_file: ~/.zerostore/decisions.md   # approved proposals land here and are read back as a source
 web_ui: true                    # the web UI at / when running `zerostore serve --http`

@@ -1,0 +1,1 @@
+<option value=""{% if not t.role %} selected{% endif %}>no role (untagged only)</option>{% for r in roles %}<option value="{{ r }}"{% if t.role == r %} selected{% endif %}>{{ r }}</option>{% endfor %}

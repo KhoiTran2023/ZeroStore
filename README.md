@@ -151,6 +151,23 @@ The MCP server is the only way in, and every request carries a token. Each token
 
 A connector added in Claude's settings gets `default` or `confidential`, never `owner`.
 
+### Roles and tags
+
+Levels decide confidential versus not. Roles decide the rest: which teams' information each agent sees.
+
+1. **Tag information by where it lives.** On the web UI's settings page, under "who sees what", give a Drive folder (and everything in it), a GitHub repo or a Linear label a tag, for example `sales` for `Company/Sales`. The same table holds your `confidential` places.
+2. **Make roles.** A role lists the tags it may see, for example `leadership: sales, engineering`.
+3. **Give each token a role.** Pick it when you create the token, in the token list, or on the page where you allow a Claude connector. From the command line: `zerostore token create --name sales-bot --role sales`, or `zerostore token role <id> sales` to change it later.
+
+The rules:
+- Untagged information is for every agent.
+- A tagged document reaches only tokens whose role has all of its tags.
+- A default token still never sees confidential information, whatever its role.
+- Owner tokens see everything.
+- Tags reach search, reading a fact, the document list and "what changed". Facts with different tags never hide each other when one updates the other.
+
+The page writes `confidential:`, `tags:` and `roles:` in `zerostore.yaml`, the same settings the CLI and the YAML view use (see `zerostore.example.yaml`). The next sync applies new tags to your documents. A tag you remove stays hidden until that sync, so a typo never turns tagged information public.
+
 No token can edit a fact. Facts change only when your sources change. Tokens are stored hashed, every request is logged, and the server binds to `localhost` unless you give it HTTPS.
 
 ## What gets read
@@ -171,7 +188,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore sync` | Checks every source for changes now |
 | `zerostore review` | Lists what waits for you; `review approve <id>` / `review reject <id>` decide |
 | `zerostore reindex` | Rebuilds the fact store from your sources (for example after switching embeddings) |
-| `zerostore token create / list / revoke` | Manages access tokens |
+| `zerostore token create / list / role / revoke` | Manages access tokens and their roles |
 | `zerostore status` | Shows what ZeroStore holds and what waits for review |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
 | `zerostore service install / status / uninstall` | Keeps `zerostore serve --http` running in the background (systemd or launchd) |
