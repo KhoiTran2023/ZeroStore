@@ -18,6 +18,7 @@
       {% if not scheduled %}timed syncs are off in this server{% elif status.next_sync %}next {{ local_time(status.next_sync, "%m-%d %H:%M") }}{% endif %}
       · {{ status.documents }} documents, {{ status.chunks }} facts
     </div>
+    <div class="cmd">{% for s in services %}<span class="{{ {'running': 'ok', 'off': 'muted'}.get(s.state, 'warn') }}" title="{{ s.detail }}">{{ {'running': '●', 'off': '○'}.get(s.state, '▲') }} {{ s.name }}</span>{{ " · " if not loop.last }}{% endfor %} <a href="/settings">details</a></div>
     {% if sync_result and not syncing %}<div class="cmd {{ 'ok' if sync_result.ok else 'warn' }}">{{ sync_result.text }}</div>{% endif %}
     {% if last and last.problems %}
     <ul class="list">{% for p in last.problems %}<li class="cmd warn">{{ p.source }}: {{ p.error or p.warning or (p.failed ~ " documents failed") }}</li>{% endfor %}</ul>

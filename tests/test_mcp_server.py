@@ -82,12 +82,27 @@ def test_search_answers_carry_sources(seeded, tokens):
     assert fact["source_url"].startswith("https://docs.google.com/")
 
 
+def test_search_and_fetch_in_the_shape_chatgpt_reads(seeded, tokens):
+    """ChatGPT's search and deep research read `results` (id, title, url) and `fetch(id)`."""
+    server = build_server(seeded, Caller(tokens["default"]))
+    found = ok(run(lambda: call(server, "search", {"query": "pro plan price"})))
+    first = found["results"][0]
+    assert set(first) == {"id", "title", "url"} and first["id"] == found["facts"][0]["id"]
+    fetched = ok(run(lambda: call(server, "fetch", {"id": first["id"]})))
+    assert set(fetched) == {"id", "title", "text", "url", "metadata"}
+    assert fetched["title"] == "Pricing 2026" and fetched["url"] == first["url"]
+
+    from conftest import salary_doc
+
+    assert "no fact" in err(run(lambda: call(server, "fetch", {"id": salary_doc()[0].id})))  # still levelled
+
+
 def test_not_sure_when_store_is_empty(zs):
     raw, _ = zs.tokens.create("a", "default")
     server = build_server(zs, Caller(raw))
     result = ok(run(lambda: call(server, "search", {"query": "pricing"})))
     assert result["answer"] == "not sure"
-    assert result["facts"] == []
+    assert result["facts"] == [] and result["results"] == []
     assert "Ask the user" in result["note"]
 
 

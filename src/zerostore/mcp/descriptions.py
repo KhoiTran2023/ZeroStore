@@ -29,6 +29,11 @@ GET_FACT = (
     "last-updated date. Use it to re-check or quote a fact you found earlier."
 )
 
+FETCH = (
+    "Fetch the full text of one search result by its id, with its title, source link and last-updated "
+    "date. Same as get_fact, in the shape ChatGPT's search and deep research expect."
+)
+
 WHATS_CHANGED = (
     "List what changed in company knowledge since a date (e.g. '2026-10-01') or a span (e.g. '7d', '24h'). "
     "Use this at the start of a task you last worked on a while ago, or when the user asks what's new, "

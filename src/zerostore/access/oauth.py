@@ -8,18 +8,29 @@ web UI asks you, the owner, whether to allow it and at which access level. Claud
 then swaps the one-time code (with PKCE) for an access token, which is an ordinary
 ZeroStore token: it shows in your token list and revoking it there disconnects Claude.
 
-Clients are kept in the state database so they survive restarts. Requests waiting
-for your answer and the one-time codes live in memory for a few minutes.
+Apps that publish a client ID metadata document (ChatGPT, Grok, newer Claude
+apps) skip registration: their client_id is an https address, and ZeroStore reads
+the app's name and callback addresses from it. Registered clients are kept in the
+state database so they survive restarts; requests waiting for your answer and the
+one-time codes live in memory for a few minutes.
 """
 
 from __future__ import annotations
 
+import ipaddress
+import json
+import logging
 import secrets
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import getproxies
 
+import anyio
+import httpx
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -35,11 +46,101 @@ from zerostore.access.tokens import AccessLevel, TokenStore
 from zerostore.access.tokens import TokenError as ZeroStoreTokenError
 from zerostore.store.state import StateDB
 
+log = logging.getLogger("zerostore.oauth")
+
 APPROVE_PATH = "/connect/approve"
 REQUEST_TTL = 600  # seconds to answer the "Allow Claude?" page
 CODE_TTL = 300  # seconds Claude has to swap the code for a token
 MAX_CLIENTS = 200  # registration is open to anyone, so keep it bounded
 LEVELS = (AccessLevel.DEFAULT, AccessLevel.CONFIDENTIAL)
+DOCUMENT_TTL = 3600  # seconds a client ID metadata document is reused before it is read again
+DOCUMENT_MAX = 64 * 1024  # bytes
+
+FetchDocument = Callable[[str], Awaitable[dict[str, Any]]]
+
+
+class DocumentError(Exception):
+    """A client ID metadata document couldn't be read or isn't valid."""
+
+
+def is_document_url(client_id: str) -> bool:
+    """A client_id that names a client ID metadata document: an https address with a path."""
+    url = urlparse(client_id)
+    return (
+        url.scheme == "https"
+        and bool(url.hostname)
+        and url.path not in ("", "/")
+        and not url.fragment
+        and not url.username
+        and url.port in (None, 443)
+    )
+
+
+async def fetch_document(url: str) -> dict[str, Any]:
+    """Read an app's metadata document from the internet, and only from the internet.
+
+    The address comes from whoever starts a sign-in, so it must not reach this
+    computer or the local network: every address the name resolves to must be public.
+    """
+    host = urlparse(url).hostname or ""
+    if host == "localhost" or host.endswith(".localhost") or not _public_name(host):
+        raise DocumentError(f"{host} isn't a public address")
+    try:
+        found = [info[4][0] for info in await anyio.getaddrinfo(host, 443)]
+    except OSError as exc:
+        # Behind an outbound proxy only the proxy may resolve names; it decides what is reachable.
+        if "https" not in getproxies():
+            raise DocumentError(f"{host} can't be found") from exc
+        found = []
+    if not all(ipaddress.ip_address(address).is_global for address in found):
+        raise DocumentError(f"{host} isn't a public address")
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+            async with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
+                if response.status_code != 200:
+                    raise DocumentError(f"{url} answered {response.status_code}")
+                body = b""
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > DOCUMENT_MAX:
+                        raise DocumentError(f"{url} is too large")
+    except httpx.HTTPError as exc:
+        raise DocumentError(f"{url} couldn't be read: {exc}") from exc
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise DocumentError(f"{url} isn't JSON") from exc
+    if not isinstance(data, dict):
+        raise DocumentError(f"{url} isn't a JSON object")
+    return data
+
+
+def _public_name(host: str) -> bool:
+    """False for an address literal that isn't on the public internet."""
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_global
+    except ValueError:
+        return True  # a name: checked once it is resolved
+
+
+def client_from_document(url: str, data: dict[str, Any]) -> OAuthClientInformationFull:
+    if data.get("client_id") != url:
+        raise DocumentError("the document's client_id isn't its own address")
+    redirects = data.get("redirect_uris")
+    if not isinstance(redirects, list) or not redirects or not all(isinstance(r, str) for r in redirects):
+        raise DocumentError("the document lists no redirect_uris")
+    name = data.get("client_name")
+    try:
+        return OAuthClientInformationFull(
+            client_id=url,
+            client_name=name if isinstance(name, str) else urlparse(url).hostname,
+            redirect_uris=redirects,
+            grant_types=["authorization_code"],
+            response_types=["code"],
+            token_endpoint_auth_method="none",  # a public client: PKCE proves who it is
+        )
+    except ValueError as exc:
+        raise DocumentError(f"the document isn't valid: {exc}") from exc
 
 
 class ApprovalError(Exception):
@@ -68,10 +169,22 @@ class Pending:
 class ConnectorAuth:
     """The OAuth authorization server behind ZeroStore's MCP endpoint (the SDK's provider protocol)."""
 
-    def __init__(self, state: StateDB, tokens: TokenStore, base_url: str):
+    def __init__(
+        self,
+        state: StateDB,
+        tokens: TokenStore,
+        base_url: str,
+        *,
+        issuer: str | None = None,
+        read_document: FetchDocument | None = None,
+    ):
         self.state = state
         self.tokens = tokens
         self.base_url = base_url.rstrip("/")
+        # Sent back with every answer (RFC 9207), exactly as the metadata names it.
+        self.issuer = issuer or self.base_url
+        self.read_document = read_document
+        self._documents: dict[str, tuple[float, OAuthClientInformationFull]] = {}
         self._lock = threading.Lock()
         self._pending: dict[str, Pending] = {}
         self._codes: dict[str, tuple[AuthorizationCode, AccessLevel, str, str | None]] = {}
@@ -79,8 +192,25 @@ class ConnectorAuth:
     # Clients --------------------------------------------------------------------
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        if is_document_url(client_id):
+            return await self._document_client(client_id)
         rows = self.state.query("SELECT info FROM oauth_clients WHERE client_id = ?", (client_id,))
         return OAuthClientInformationFull.model_validate_json(rows[0]["info"]) if rows else None
+
+    async def _document_client(self, url: str) -> OAuthClientInformationFull | None:
+        cached = self._documents.get(url)
+        if cached and cached[0] > time.time():
+            return cached[1]
+        try:
+            read = self.read_document or fetch_document
+            client = client_from_document(url, await read(url))
+        except DocumentError as exc:
+            log.warning("connector sign-in refused for %s: %s", url, exc)
+            return None
+        if len(self._documents) >= MAX_CLIENTS:
+            self._documents.clear()
+        self._documents[url] = (time.time() + DOCUMENT_TTL, client)
+        return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if self.state.query("SELECT COUNT(*) AS n FROM oauth_clients")[0]["n"] >= MAX_CLIENTS:
@@ -122,6 +252,7 @@ class ConnectorAuth:
                 error="access_denied",
                 error_description="The ZeroStore owner didn't allow it.",
                 state=params.state,
+                iss=self.issuer,
             )
         code = AuthorizationCode(
             code=secrets.token_urlsafe(32),
@@ -135,7 +266,7 @@ class ConnectorAuth:
         )
         with self._lock:
             self._codes[code.code] = (code, AccessLevel(level), pending.name, role or None)
-        return construct_redirect_uri(pending.returns_to, code=code.code, state=params.state)
+        return construct_redirect_uri(pending.returns_to, code=code.code, state=params.state, iss=self.issuer)
 
     def _drop_old(self) -> None:
         now = time.time()

@@ -10,17 +10,22 @@ from __future__ import annotations
 
 import ipaddress
 import json
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
+from mcp.server.auth.handlers.metadata import MetadataHandler
 from mcp.server.auth.routes import (
+    build_metadata,
     build_resource_metadata_url,
+    cors_middleware,
     create_auth_routes,
     create_protected_resource_routes,
 )
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from zerostore.access.oauth import ConnectorAuth
@@ -126,16 +131,33 @@ def connector_sign_in(zs: ZeroStore, mcp_url: str | None) -> tuple[ConnectorAuth
     url = urlparse(base)
     if url.scheme != "https" and not is_loopback(url.hostname or ""):
         return None
-    provider = ConnectorAuth(zs.state, zs.tokens, base)
     # AuthSettings keeps a path-less issuer without a trailing slash; issuers are compared exactly.
     urls = AuthSettings(issuer_url=base, resource_server_url=mcp_url, validate_token_resource=False)
+    provider = ConnectorAuth(zs.state, zs.tokens, base, issuer=str(urls.issuer_url))
+    registration = ClientRegistrationOptions(enabled=True)
+    revocation = RevocationOptions(enabled=True)
+    # Besides registering, apps may name a client ID metadata document (ChatGPT, Grok), and
+    # every answer carries the issuer (RFC 9207), which ChatGPT checks.
+    metadata = build_metadata(urls.issuer_url, None, registration, revocation).model_copy(
+        update={
+            "client_id_metadata_document_supported": True,
+            "authorization_response_iss_parameter_supported": True,
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+        }
+    )
+    auth_routes = create_auth_routes(
+        provider,
+        issuer_url=urls.issuer_url,
+        client_registration_options=registration,
+        revocation_options=revocation,
+    )
     routes = [
-        *create_auth_routes(
-            provider,
-            issuer_url=urls.issuer_url,
-            client_registration_options=ClientRegistrationOptions(enabled=True),
-            revocation_options=RevocationOptions(enabled=True),
+        Route(
+            "/.well-known/oauth-authorization-server",
+            endpoint=cors_middleware(MetadataHandler(metadata).handle, ["GET", "OPTIONS"]),
+            methods=["GET", "OPTIONS"],
         ),
+        *(r for r in auth_routes if getattr(r, "path", "") != "/.well-known/oauth-authorization-server"),
         *create_protected_resource_routes(
             resource_url=urls.resource_server_url,
             authorization_servers=[urls.issuer_url],
@@ -177,6 +199,7 @@ def create_http_app(
     mcp_url: str | None = None,
     behind_proxy: bool = False,
     scheduled: bool = True,
+    scheduler_alive: Callable[[], bool] | None = None,
 ) -> ASGIApp:
     """The MCP server at /mcp, plus the web UI at / when `web_ui` is on and the config file is known."""
     server = build_server(zs, bearer_token_source)
@@ -198,6 +221,7 @@ def create_http_app(
         mcp_url=mcp_url,
         behind_proxy=behind_proxy,
         scheduled=scheduled,
+        scheduler_alive=scheduler_alive,
         connectors=provider,
     )
     return Router(mcp, web, oauth)

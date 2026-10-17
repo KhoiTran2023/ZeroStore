@@ -108,6 +108,9 @@ class SyncScheduler:
         self._thread = threading.Thread(target=self._loop, name="zerostore-scheduler", daemon=True)
         self._thread.start()
 
+    def alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread:

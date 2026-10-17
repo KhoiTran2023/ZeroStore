@@ -4,7 +4,7 @@
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
-> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, and remembered keep answers so edits to long documents cost less.
+> Status: early development. Working so far: settings, the fact store, tokens with access levels, the MCP server, syncing from Google Drive, GitHub and Linear, the librarian's judgment (noise filtering, confidence and the review queue, reranking and "not sure"), `zerostore demo`, the web UI, the one-line installer, the background service, Sign in with Google, remembered keep answers so edits to long documents cost less, connectors for Claude, ChatGPT and Grok, roles and tags, and live health for the four services. See [CHANGELOG.md](CHANGELOG.md) for what changed in each step.
 
 ## Install
 
@@ -88,6 +88,19 @@ zerostore service install --behind-https-proxy --public-url https://zs.example.c
 
 Add `--host 0.0.0.0` only when the HTTPS proxy runs on a different machine, such as a cloud load balancer.
 
+## The four services
+
+One program, `zerostore serve --http`, runs all four parts:
+
+| Part | What it does | Where |
+|---|---|---|
+| web console | the admin pages: setup, status, review, log, settings | `http://<address>/` |
+| mcp server | where agents connect and ask | `http://<address>/mcp` |
+| vector db | LanceDB, holding the facts and their embeddings | `servers.vectordb` in `zerostore.yaml` |
+| ingestion agent | the librarian's timed syncs from Google Drive, GitHub and Linear | `sync.schedule` in `zerostore.yaml` |
+
+The settings page shows whether each part is running, and why, and the status page shows the same as four dots. From a terminal, `zerostore status` lists them too, even while the server runs elsewhere on the same machine. The server writes a heartbeat to the state file every 15 seconds, and a server that stops writing it shows as stopped. `--no-schedule` turns the ingestion agent off, which shows as off rather than stopped.
+
 ## The librarian's judgment
 
 Add an AI key and ZeroStore judges every change before agents see it. [Jev](https://typesafe.ai) answers each judgment call in about a tenth of a second; without a Jev key, your own AI provider answers the same questions (Anthropic, OpenAI, Gemini, OpenRouter or a local Ollama).
@@ -130,14 +143,19 @@ Run ZeroStore behind it with `zerostore service install --behind-https-proxy --p
 
 Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else.
 
-### Add it like Gmail (Claude's Connectors)
+### Add it like Gmail (Claude, ChatGPT, Grok)
 
-Claude on the web, in Claude Desktop and on the phone can add ZeroStore the way it adds Gmail, with no token to copy:
+Claude, ChatGPT and Grok on the web and phone add ZeroStore the way they add Gmail, with no token to copy:
 
-1. In Claude, open Settings, Connectors, Add custom connector, and paste `https://<your address>/mcp`.
-2. Claude sends you to ZeroStore's web UI. Sign in if asked, pick the access level (default or confidential), and click Allow.
+1. Paste `https://<your address>/mcp` in the app:
+   - Claude: Settings, Connectors, Add custom connector.
+   - ChatGPT: chatgpt.com/plugins, then "+", then "Add custom MCP server".
+   - Grok: grok.com/connectors, then New Connector, then Custom.
+2. The app sends you to ZeroStore's web UI. Sign in if asked, pick the access level and role, and click Allow.
 
-From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. The connection shows in your token list as "Claude (connector)"; revoke it there to disconnect. Claude's servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
+Step-by-step guides for every agent are in [docs/connect-agents.md](docs/connect-agents.md).
+
+From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. ChatGPT works the same once you turn the connector on for a conversation. The connection shows in your token list as "<app> (connector)"; revoke it there to disconnect. The apps' servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
 
 ## How access works
 
@@ -189,7 +207,7 @@ ZeroStore only reads. Unchanged files are skipped, edited files replace their ol
 | `zerostore review` | Lists what waits for you; `review approve <id>` / `review reject <id>` decide |
 | `zerostore reindex` | Rebuilds the fact store from your sources (for example after switching embeddings) |
 | `zerostore token create / list / role / revoke` | Manages access tokens and their roles |
-| `zerostore status` | Shows what ZeroStore holds and what waits for review |
+| `zerostore status` | Shows what ZeroStore holds, what waits for review, and whether the four services are up |
 | `zerostore connect <agent>` | Adds or removes the "check ZeroStore first" line |
 | `zerostore service install / status / uninstall` | Keeps `zerostore serve --http` running in the background (systemd or launchd) |
 | `zerostore demo` | Plays the Pebble & Co. story; `demo start`, `change-price`, `add-note` and `remove` step through it |
