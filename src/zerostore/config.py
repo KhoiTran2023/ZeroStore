@@ -159,17 +159,26 @@ class RetrievalSettings(_Section):
         return cleaned
 
 
-class ConfidentialRule(_Section):
+class LocationRule(_Section):
+    """Where information lives: a Drive folder (and everything in it), a GitHub repo, a Linear label."""
+
     google_drive: str | None = None
     linear_label: str | None = None
     github: str | None = None
 
     @model_validator(mode="after")
-    def _exactly_one(self) -> ConfidentialRule:
+    def _exactly_one(self) -> LocationRule:
         set_fields = [k for k in ("google_drive", "linear_label", "github") if getattr(self, k)]
         if len(set_fields) != 1:
-            raise ValueError("each confidential rule names exactly one of google_drive, linear_label, github")
+            raise ValueError("each rule names exactly one of google_drive, linear_label, github")
         return self
+
+
+ConfidentialRule = LocationRule
+
+# Tag and role names: lowercase letters, digits and dashes (they are matched inside filters).
+NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+RESERVED_TAGS = ("confidential",)  # set with the `confidential:` list and the confidential level
 
 
 class ServerSettings(_Section):
@@ -202,6 +211,10 @@ class Config(_Section):
     review: ReviewSettings = Field(default_factory=ReviewSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     confidential: list[ConfidentialRule] = Field(default_factory=list)
+    # Tags mark information by where it lives; a role lists the tags its agents may see.
+    # Untagged information is for every agent.
+    tags: dict[str, list[LocationRule]] = Field(default_factory=dict)
+    roles: dict[str, list[str]] = Field(default_factory=dict)
     agent_proposals: bool = True
     # Approved agent proposals are written here and read back as a source.
     decisions_file: str | None = None  # default: ~/.zerostore/decisions.md
@@ -209,6 +222,29 @@ class Config(_Section):
     servers: ServerSettings = Field(default_factory=ServerSettings)
     # Set only by `zerostore demo`: every source is read from this folder of made-up files.
     demo: str | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def _tag_names(cls, tags: dict[str, list[LocationRule]]) -> dict[str, list[LocationRule]]:
+        for name, rules in tags.items():
+            if not NAME.fullmatch(name):
+                raise ValueError(f"tag {name!r}: use lowercase letters, digits and dashes")
+            if name in RESERVED_TAGS:
+                raise ValueError("list confidential places under `confidential:`, not as a tag")
+            if not rules:
+                raise ValueError(f"tag {name!r} needs at least one place (a Drive folder, repo or label)")
+        return tags
+
+    @model_validator(mode="after")
+    def _roles_name_tags(self) -> Config:
+        for name, tags in self.roles.items():
+            if not NAME.fullmatch(name):
+                raise ValueError(f"role {name!r}: use lowercase letters, digits and dashes")
+            unknown = [t for t in tags if t not in self.tags]
+            if unknown:
+                missing = ", ".join(unknown)
+                raise ValueError(f"role {name!r} names tags that aren't defined under tags: {missing}")
+        return self
 
     @model_validator(mode="after")
     def _engines_have_keys(self) -> Config:

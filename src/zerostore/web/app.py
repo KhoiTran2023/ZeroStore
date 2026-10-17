@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from zerostore import __version__
 from zerostore.access.oauth import APPROVE_PATH, ApprovalError, ConnectorAuth
+from zerostore.access.roles import role_problem
 from zerostore.agents import commands as agent_commands
 from zerostore.app import ZeroStore
 from zerostore.config import config_env
@@ -318,6 +319,7 @@ def create_web_app(
                 "flash": flash,
                 "config_path": str(config_path),
                 "loopback": loopback_only,
+                "roles": list(zs.config.roles),
                 **ctx,
             },
         )
@@ -499,6 +501,7 @@ def create_web_app(
             yaml_text=text,
             yaml_version=version_of(text),
             tokens=tokens,
+            tag_counts=status.get("tags", {}),
             me=caller.id,
             servers=_servers(zs, bound_host, mcp_url),
         )
@@ -506,7 +509,12 @@ def create_web_app(
     @app.post("/settings")
     async def save_settings(request: Request):
         session, form = await posted(request)
-        return await _save(session, lambda: apply_form(config_path, form), form.get("back") or "/settings")
+        return await _save(
+            session,
+            lambda: apply_form(config_path, form),
+            form.get("back") or "/settings",
+            access_changed="access" in form.get("sections", ""),
+        )
 
     @app.post("/settings/yaml")
     async def save_yaml(request: Request):
@@ -517,7 +525,7 @@ def create_web_app(
             "/settings?view=yaml",
         )
 
-    async def _save(session: auth.Session, action, back: str):
+    async def _save(session: auth.Session, action, back: str, access_changed: bool = False):
         if back not in ("/settings", "/settings?view=yaml", "/setup?step=2", "/setup?step=3"):
             back = "/settings"  # only pages of this app, never a redirect elsewhere
         try:
@@ -525,12 +533,13 @@ def create_web_app(
         except SettingsError as exc:
             say(session, "warn", f"Not saved: {exc}")
             return RedirectResponse(back, status_code=303)
-        zs.config = config  # syncs, review and search thresholds use it from now on
+        zs.config = config  # syncs, review, search thresholds and roles use it from now on
         say(
             session,
             "ok",
             f"Saved to {config_path.name}. Syncs use it now; restart `zerostore serve` for new "
-            "server addresses or new AI keys in search.",
+            "server addresses or new AI keys in search."
+            + (" Run a sync to apply tag changes to your documents." if access_changed else ""),
         )
         return RedirectResponse(back, status_code=303)
 
@@ -540,19 +549,36 @@ def create_web_app(
         name = (form.get("name") or "").strip() or "agent"
         level = form.get("level") if form.get("level") in ("default", "confidential", "owner") else "default"
         back = form.get("back") if form.get("back") in ("/settings", "/setup?step=3") else "/settings"
+        role = form.get("role") or None
         try:
-            made = await call(session.token, "token_create", name=name, level=level)
+            made = await call(session.token, "token_create", name=name, level=level, role=role)
         except OwnerError as exc:
             say(session, "warn", str(exc))
             return RedirectResponse(back, status_code=303)
         say(
             session,
             "token",
-            f"Created {made['name']} ({made['level']}). Copy it now: it isn't shown again.",
+            f"Created {made['name']} ({made['level']}{', role ' + made['role'] if made.get('role') else ''})."
+            " Copy it now: it isn't shown again.",
             token=made["token"],
             commands=connect_commands(made["token"], config_path, mcp_url),
         )
         return RedirectResponse(back, status_code=303)
+
+    @app.post("/tokens/{token_id}/role")
+    async def set_token_role(request: Request, token_id: str):
+        session, form = await posted(request)
+        role = form.get("role") or None
+        try:
+            await call(session.token, "token_set_role", id=token_id, role=role)
+            say(
+                session,
+                "ok",
+                f"Role set to {role}." if role else "Role removed: it sees untagged facts only.",
+            )
+        except OwnerError as exc:
+            say(session, "warn", str(exc))
+        return RedirectResponse("/settings", status_code=303)
 
     @app.post("/tokens/{token_id}/revoke")
     async def revoke_token(request: Request, token_id: str):
@@ -640,9 +666,13 @@ def create_web_app(
         if connectors is None:
             raise HTTPException(404)
         allow = form.get("answer") == "allow"
+        role = form.get("role") or None
+        problem = role_problem(zs.config, role) if allow else None
+        if problem:
+            return connect_done(request, f"Not connected: {problem}.")
         try:
             pending = connectors.pending(form.get("request", ""))
-            to = connectors.answer(pending.id, allow=allow, level=form.get("level") or "default")
+            to = connectors.answer(pending.id, allow=allow, level=form.get("level") or "default", role=role)
         except ApprovalError as exc:
             return connect_done(request, f"Not connected: {exc}.")
         if allow:

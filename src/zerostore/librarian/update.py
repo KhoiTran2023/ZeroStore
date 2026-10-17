@@ -173,12 +173,17 @@ class Librarian:
     # Changes -----------------------------------------------------------------
 
     def plan(
-        self, doc: SourceDocument, confidential: bool, record: dict[str, Any] | None, judged: bool = True
+        self,
+        doc: SourceDocument,
+        confidential: bool,
+        record: dict[str, Any] | None,
+        judged: bool = True,
+        access: str = "",
     ) -> ChangePlan:
         """Work out what this version of `doc` would change. Raises EngineError if judging fails."""
         from zerostore.librarian.ingestion import to_chunks
 
-        chunks = to_chunks(doc, confidential)
+        chunks = to_chunks(doc, confidential, access)
         plan = ChangePlan(
             action="updated" if record and record["chunks"] else "added",
             record={
@@ -191,6 +196,7 @@ class Librarian:
                 "updated_at": doc.updated_at,
                 "location": doc.location,
                 "confidential": int(confidential),
+                "access": access,
                 "chunks": 0,
             },
             chunks=chunks,
@@ -288,8 +294,8 @@ class Librarian:
                 continue
             # Only facts with the same access compete: a confidential document must never
             # hide a fact default tokens can see, nor be named in their audit rows, and a
-            # public chunk is never hidden behind a confidential one.
-            if bool(row["confidential"]) != chunk.confidential:
+            # public chunk is never hidden behind a confidential one. Tags count the same way.
+            if bool(row["confidential"]) != chunk.confidential or row["access"] != chunk.access:
                 continue
             return row
         return None
@@ -319,6 +325,7 @@ class Librarian:
                 confidence=plan.confidence,
                 engine=plan.engine,
                 confidential=bool(plan.record["confidential"]),
+                access=plan.record.get("access") or "",
             )
             return
         detail = plan.title + (f" ({plan.note()})" if plan.note() else "")
@@ -332,6 +339,7 @@ class Librarian:
             confidence=plan.confidence,
             engine=plan.engine,
             confidential=bool(plan.record["confidential"]),
+            access=plan.record.get("access") or "",
         )
 
     def queue(self, plan: ChangePlan, *, rules: str | None = None) -> int:
@@ -353,15 +361,17 @@ class Librarian:
             confidence=plan.confidence,
             engine=plan.engine,
             confidential=bool(plan.record["confidential"]),
+            access=plan.record.get("access") or "",
         )
         return item
 
-    def waiting(self, doc_id: str, fingerprint: str, confidential: bool) -> bool:
-        """This exact version, with this access level, is already waiting for a person."""
+    def waiting(self, doc_id: str, fingerprint: str, confidential: bool, access: str = "") -> bool:
+        """This exact version, with this access level and these tags, is already waiting for a person."""
         return any(
             item["kind"] == "change"
             and item["payload"]["record"]["fingerprint"] == fingerprint
             and bool(item["payload"]["record"]["confidential"]) == confidential
+            and item["payload"]["record"].get("access", "") == access
             for item in self.zs.state.pending_for_document(doc_id)
         )
 
@@ -381,10 +391,11 @@ class Librarian:
         candidates: list[dict[str, Any]] = []
         seen = {record["doc_id"]}
         confidential = bool(record["confidential"])
-        # Candidates share the deleted file's access level, so a public audit row never names a
-        # confidential document.
+        access = record.get("access") or ""
+        # Candidates share the deleted file's access level and tags, so a public audit row
+        # never names a confidential document.
         for doc in added:  # documents that appeared in this same sync come first
-            if doc["doc_id"] in seen or doc["confidential"] != confidential:
+            if doc["doc_id"] in seen or doc["confidential"] != confidential or doc["access"] != access:
                 continue
             if len(candidates) < MAX_CANDIDATES:
                 seen.add(doc["doc_id"])
@@ -392,7 +403,7 @@ class Librarian:
         for row in self.zs.facts.search(excerpt or record["title"], include_confidential=True, limit=10):
             if row["doc_id"] in seen or len(candidates) >= MAX_CANDIDATES:
                 continue
-            if bool(row["confidential"]) != confidential:
+            if bool(row["confidential"]) != confidential or row["access"] != access:
                 continue
             seen.add(row["doc_id"])
             candidates.append(
@@ -445,6 +456,7 @@ class Librarian:
             confidence=confidence,
             engine=engine,
             confidential=bool(record["confidential"]),
+            access=record.get("access") or "",
         )
 
     def keep_deleted(self, record: dict[str, Any], *, confidence: float | None, engine: str | None) -> None:
@@ -457,6 +469,7 @@ class Librarian:
             confidence=confidence,
             engine=engine,
             confidential=bool(record["confidential"]),
+            access=record.get("access") or "",
         )
 
     def queue_delete(self, record: dict[str, Any], decision: DeleteDecision) -> int:
@@ -481,5 +494,6 @@ class Librarian:
             confidence=decision.confidence,
             engine=decision.engine,
             confidential=bool(record["confidential"]),
+            access=record.get("access") or "",
         )
         return item

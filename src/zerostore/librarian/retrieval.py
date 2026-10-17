@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,7 +57,7 @@ class Retriever:
                 self._engines = build_engines(self.zs.config)
             return self._engines
 
-    def answer(self, question: str, *, include_confidential: bool) -> Answer:
+    def answer(self, question: str, *, include_confidential: bool, hidden_tags: Sequence[str] = ()) -> Answer:
         settings = self.zs.config.retrieval
         engines = self.engines
         out = Answer()
@@ -72,7 +73,11 @@ class Retriever:
 
         def search(topics: list[str] | None) -> list[dict[str, Any]]:
             return self.zs.facts.search(
-                question, include_confidential=include_confidential, topics=topics, limit=pool
+                question,
+                include_confidential=include_confidential,
+                hidden_tags=hidden_tags,
+                topics=topics,
+                limit=pool,
             )
 
         candidates = search(out.topics)

@@ -74,7 +74,7 @@ class ConnectorAuth:
         self.base_url = base_url.rstrip("/")
         self._lock = threading.Lock()
         self._pending: dict[str, Pending] = {}
-        self._codes: dict[str, tuple[AuthorizationCode, AccessLevel, str]] = {}
+        self._codes: dict[str, tuple[AuthorizationCode, AccessLevel, str, str | None]] = {}
 
     # Clients --------------------------------------------------------------------
 
@@ -106,7 +106,7 @@ class ConnectorAuth:
             raise ApprovalError("this sign-in expired or was already answered; start again from the app")
         return found
 
-    def answer(self, request_id: str, *, allow: bool, level: str = "default") -> str:
+    def answer(self, request_id: str, *, allow: bool, level: str = "default", role: str | None = None) -> str:
         """The owner's answer: where to send the browser back to the app, with a code or a refusal."""
         if allow and level not in [x.value for x in LEVELS]:
             raise ApprovalError("a connector gets default or confidential access")
@@ -134,14 +134,14 @@ class ConnectorAuth:
             resource=params.resource,
         )
         with self._lock:
-            self._codes[code.code] = (code, AccessLevel(level), pending.name)
+            self._codes[code.code] = (code, AccessLevel(level), pending.name, role or None)
         return construct_redirect_uri(pending.returns_to, code=code.code, state=params.state)
 
     def _drop_old(self) -> None:
         now = time.time()
         for key in [k for k, p in self._pending.items() if now - p.created > REQUEST_TTL]:
             del self._pending[key]
-        for key in [k for k, (c, _, _) in self._codes.items() if c.expires_at < now]:
+        for key in [k for k, (c, *_) in self._codes.items() if c.expires_at < now]:
             del self._codes[key]
 
     # Codes and tokens -----------------------------------------------------------
@@ -163,8 +163,8 @@ class ConnectorAuth:
             found = self._codes.pop(authorization_code.code, None)  # each code works once
         if found is None:
             raise TokenError("invalid_grant", "this code was already used or has expired")
-        _, level, name = found
-        raw, _ = self.tokens.create(f"{name} (connector)", level)
+        _, level, name, role = found
+        raw, _ = self.tokens.create(f"{name} (connector)", level, role=role)
         # A ZeroStore token doesn't expire; revoke it in the token list to disconnect the app.
         return OAuthToken(
             access_token=raw, token_type="Bearer", scope=" ".join(authorization_code.scopes) or None

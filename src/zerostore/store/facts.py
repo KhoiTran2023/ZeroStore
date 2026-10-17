@@ -1,7 +1,8 @@
 """The fact store: document chunks in LanceDB.
 
 Each row is one chunk of a source document, stored word for word with its
-source link, last-updated date, topic tags and a `confidential` flag. The store
+source link, last-updated date, topic tags, a `confidential` flag and its access
+tags (`access`, see access/roles.py). The store
 holds only the current version of each document; history lives in the audit
 table. It runs in-process, on local disk or on S3 (`s3://bucket/path`).
 
@@ -13,6 +14,8 @@ search. If that newer document is later retired, the older chunk comes back.
 from __future__ import annotations
 
 import hashlib
+import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -23,6 +26,7 @@ import pyarrow as pa
 from zerostore.store.embeddings import Embedder
 
 TABLE = "chunks"
+TAG = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")  # as config.NAME
 # How stale a read may be. Every agent runs its own `zerostore serve` process, and a sync
 # in any other process must reach all of them, so each reads the latest table version
 # at most this long after it was written.
@@ -41,6 +45,7 @@ class Chunk:
     topics: list[str] = field(default_factory=list)
     confidential: bool = False
     superseded_by: str = ""
+    access: str = ""  # the document's tags, like ",finance,sales," (empty: every role sees it)
 
     @property
     def id(self) -> str:
@@ -77,6 +82,7 @@ class FactStore:
                 ("topics", pa.list_(pa.string())),
                 ("confidential", pa.bool_()),
                 ("superseded_by", pa.string()),
+                ("access", pa.string()),
                 ("vector", pa.list_(pa.float32(), self.embedder.dim)),
             ],
             metadata={b"zerostore.embedder": self.embedder.name.encode()},
@@ -105,6 +111,8 @@ class FactStore:
             built_with = (table.schema.metadata or {}).get(b"zerostore.embedder", b"unknown").decode()
             if "superseded_by" not in table.schema.names:  # stores made before superseding existed
                 table.add_columns({"superseded_by": "CAST('' AS STRING)"})
+            if "access" not in table.schema.names:  # stores made before tags existed
+                table.add_columns({"access": "CAST('' AS STRING)"})
             if built_with != self.embedder.name:
                 raise RuntimeError(
                     f"the fact store at {self.uri} was built with the {built_with} embedder, but "
@@ -172,10 +180,10 @@ class FactStore:
     def count(self) -> int:
         return self._table.count_rows()
 
-    def get(self, fact_id: str, *, include_confidential: bool) -> dict[str, Any] | None:
-        where = f"id = {_quote(fact_id)}"
-        if not include_confidential:
-            where += " AND confidential = false"
+    def get(
+        self, fact_id: str, *, include_confidential: bool, hidden_tags: Sequence[str] = ()
+    ) -> dict[str, Any] | None:
+        where = " AND ".join([f"id = {_quote(fact_id)}", *_access_filters(include_confidential, hidden_tags)])
         rows = self._table.search().where(where).limit(1).to_list()
         return _public(rows[0]) if rows else None
 
@@ -188,12 +196,13 @@ class FactStore:
         query: str,
         *,
         include_confidential: bool,
+        hidden_tags: Sequence[str] = (),
         topics: list[str] | None = None,
         limit: int = 20,
         exclude_doc: str | None = None,
         include_superseded: bool = False,
     ) -> list[dict[str, Any]]:
-        """Hybrid vector + keyword search, pre-filtered by access level and topics.
+        """Hybrid vector + keyword search, pre-filtered by access level, tags and topics.
 
         A topic filter keeps chunks that have no tags (stored before any AI was
         set up), so narrowing never hides them. Results carry `search_score`
@@ -203,9 +212,7 @@ class FactStore:
         query = query.strip()
         if not query or self.count() == 0:
             return []
-        filters = []
-        if not include_confidential:
-            filters.append("confidential = false")
+        filters = _access_filters(include_confidential, hidden_tags)
         if not include_superseded:
             filters.append("superseded_by = ''")
         if topics:
@@ -219,11 +226,11 @@ class FactStore:
             builder = builder.where(" AND ".join(filters), prefilter=True)
         return [_public(r) for r in builder.limit(limit).to_list()]
 
-    def sources(self, *, include_confidential: bool) -> list[dict[str, Any]]:
+    def sources(self, *, include_confidential: bool, hidden_tags: Sequence[str] = ()) -> list[dict[str, Any]]:
         """One entry per document: id, title, source, link, last updated, chunk count."""
         builder = self._table.search().select(["doc_id", "title", "source", "source_url", "updated_at"])
         builder = builder.where(
-            "superseded_by = ''" + ("" if include_confidential else " AND confidential = false")
+            " AND ".join(["superseded_by = ''", *_access_filters(include_confidential, hidden_tags)])
         )
         docs: dict[str, dict[str, Any]] = {}
         for row in builder.limit(max(self.count(), 1)).to_list():
@@ -240,6 +247,16 @@ class FactStore:
             )
             doc["chunks"] += 1
         return sorted(docs.values(), key=lambda d: (d["source"], d["title"]))
+
+
+def _access_filters(include_confidential: bool, hidden_tags: Sequence[str]) -> list[str]:
+    """Leave out confidential facts, and every fact carrying one of `hidden_tags`."""
+    filters = [] if include_confidential else ["confidential = false"]
+    for tag in hidden_tags:
+        if not TAG.fullmatch(tag):  # names are checked in the settings; never build a filter from others
+            raise ValueError(f"not a tag name: {tag!r}")
+        filters.append(f"access NOT LIKE '%,{tag},%'")
+    return filters
 
 
 def _public(row: dict[str, Any]) -> dict[str, Any]:

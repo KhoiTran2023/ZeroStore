@@ -50,9 +50,14 @@ PROPOSE_FACT = (
 
 TOKEN_CREATE = (
     "Owner only. Create an access token for an agent or person. Levels: 'default' (non-confidential facts), "
-    "'confidential' (all facts), 'owner' (all facts plus setup). The token is shown once."
+    "'confidential' (all facts), 'owner' (all facts plus setup). An optional `role` from the settings "
+    "decides which tagged facts a default or confidential token sees. The token is shown once."
 )
-TOKEN_LIST = "Owner only. List active access tokens with their names, levels and last use."
+TOKEN_LIST = "Owner only. List active access tokens with their names, levels, roles and last use."
+TOKEN_SET_ROLE = (
+    "Owner only. Give a default or confidential token another role from the settings, or none "
+    "(untagged facts only). Takes effect on the token's next call."
+)
 TOKEN_REVOKE = "Owner only. Revoke an access token by its id; agents using it lose access immediately."
 REVIEW_LIST = (
     "Owner only. List items waiting for a person's decision: low-confidence changes, "

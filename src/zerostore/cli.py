@@ -102,8 +102,8 @@ def _open(config_path: Path | None, quiet: bool = True):
         _fail(str(exc))
 
 
-def _open_tokens(config_path: Path | None):
-    """Just the token store, for commands that don't touch facts."""
+def _open_tokens(config_path: Path | None, with_config: bool = False):
+    """Just the token store (and the settings), for commands that don't touch facts."""
     from zerostore.access.tokens import TokenStore
     from zerostore.store.state import StateDB
 
@@ -111,7 +111,8 @@ def _open_tokens(config_path: Path | None):
         config = load_config(config_path)
     except ConfigError as exc:
         _fail(str(exc))
-    return TokenStore(StateDB(config.servers.statedb_path()))
+    tokens = TokenStore(StateDB(config.servers.statedb_path()))
+    return (tokens, config) if with_config else tokens
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -538,17 +539,22 @@ def reindex(
 def token_create(
     name: str = typer.Option(..., help="A label for who uses it, e.g. cursor-laptop."),
     level: AccessLevel = typer.Option(AccessLevel.DEFAULT, help="default, confidential or owner."),
+    role: str | None = typer.Option(None, help="A role from zerostore.yaml: which tagged facts it sees."),
     config: Path = ConfigOption,
 ) -> None:
     """Create a token. It is shown once; store it in the agent's settings."""
-    tokens = _open_tokens(config)
+    from zerostore.access.roles import role_problem
+
+    tokens, cfg = _open_tokens(config, with_config=True)
+    problem = None if level is AccessLevel.OWNER else role_problem(cfg, role)
+    if problem:
+        _fail(problem)
     try:
-        raw, info = tokens.create(name, level)
+        raw, info = tokens.create(name, level, role=role)
     except ValueError as exc:
         _fail(str(exc))
-    typer.echo(
-        f"Created token {info.id} ({info.name}, {info.level.value}). Copy it now; it won't be shown again:"
-    )
+    what = info.level.value + (f", role {info.role}" if info.role else "")
+    typer.echo(f"Created token {info.id} ({info.name}, {what}). Copy it now; it won't be shown again:")
     typer.echo(raw)
 
 
@@ -564,7 +570,25 @@ def token_list(
         return
     for t in tokens:
         state = f"revoked {t.revoked_at}" if t.revoked_at else f"last used {t.last_used_at or 'never'}"
-        typer.echo(f"{t.id}  {t.level.value:<12} {t.name:<24} {state}")
+        typer.echo(f"{t.id}  {t.level.value:<12} {(t.role or '-'):<12} {t.name:<24} {state}")
+
+
+@token_app.command("role")
+def token_role(
+    token_id: str = typer.Argument(..., help="The token's id from `zerostore token list`."),
+    role: str = typer.Argument("", help="A role from zerostore.yaml; leave out for untagged facts only."),
+    config: Path = ConfigOption,
+) -> None:
+    """Give a token another role (which tagged facts it sees)."""
+    from zerostore.access.roles import role_problem
+
+    tokens, cfg = _open_tokens(config, with_config=True)
+    problem = role_problem(cfg, role or None)
+    if problem:
+        _fail(problem)
+    if not tokens.set_role(token_id, role or None):
+        _fail(f"no active default or confidential token with id {token_id}")
+    typer.echo(f"{token_id} now has {f'role {role}' if role else 'no role (untagged facts only)'}.")
 
 
 @token_app.command("revoke")

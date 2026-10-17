@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from zerostore.access.roles import access_key, matches, tags_for
 from zerostore.app import ZeroStore
 from zerostore.config import ConfidentialRule, Config
 from zerostore.connectors.base import Connector, ConnectorError, SourceDocument
@@ -181,24 +182,26 @@ def is_confidential(doc: SourceDocument, rules: list[ConfidentialRule]) -> bool:
 
         # Facts proposed through confidential tokens live in their own file.
         return doc.doc_id == CONFIDENTIAL_DOC_ID
-    for rule in rules:
-        if rule.google_drive and doc.source == "google_drive":
-            folder = rule.google_drive.strip("/")
-            if doc.location == folder or doc.location.startswith(folder + "/"):
-                return True
-        if rule.github and doc.source == "github" and doc.location.lower() == rule.github.lower():
-            return True
-        if rule.linear_label and doc.source == "linear":
-            if rule.linear_label.lower() in (label.lower() for label in doc.labels):
-                return True
-    return False
+    return any(matches(doc, rule) for rule in rules)
+
+
+def access_of(doc: SourceDocument, config: Config) -> str:
+    """The document's tags as stored with its facts (see access/roles.py)."""
+    if doc.source == "decisions":
+        return ""  # approved proposals carry no tags; confidential ones have their own file
+    return access_key(tags_for(doc, config))
 
 
 def rules_fingerprint(config: Config) -> str:
-    return hashlib.sha256(json.dumps([r.model_dump() for r in config.confidential]).encode()).hexdigest()
+    """Changes when the confidential places or the tags change, so every document is checked again."""
+    rules: Any = [r.model_dump() for r in config.confidential]
+    if config.tags:
+        tags = {name: [r.model_dump() for r in place] for name, place in config.tags.items()}
+        rules = {"confidential": rules, "tags": tags}
+    return hashlib.sha256(json.dumps(rules, sort_keys=True).encode()).hexdigest()
 
 
-def to_chunks(doc: SourceDocument, confidential: bool) -> list[Chunk]:
+def to_chunks(doc: SourceDocument, confidential: bool, access: str = "") -> list[Chunk]:
     return [
         Chunk(
             doc_id=doc.doc_id,
@@ -209,6 +212,7 @@ def to_chunks(doc: SourceDocument, confidential: bool) -> list[Chunk]:
             updated_at=doc.updated_at,
             ordinal=i,
             confidential=confidential,
+            access=access,
         )
         for i, piece in enumerate(chunk_text(doc.text))
     ]
@@ -254,7 +258,7 @@ class Ingestor:
         if unknown:
             raise ValueError(f"not configured in sources: {', '.join(sorted(unknown))}")
 
-        # Confidentiality rules changed: re-check every document, not only changed ones.
+        # The confidential places or the tags changed: re-check every document, not only changed ones.
         rules_fp = rules_fingerprint(config)
         recheck_all = self.zs.state.get_meta("confidential_rules") != rules_fp
         remembered_before = self.librarian.remembered
@@ -335,8 +339,11 @@ class Ingestor:
                     result.skipped += 1
                 continue
             confidential = is_confidential(doc, config.confidential)
+            access = access_of(doc, config)
             same_content = record and record["fingerprint"] == doc.fingerprint
-            if same_content and bool(record["confidential"]) == confidential:
+            same_access = record and bool(record["confidential"]) == confidential
+            same_access = same_access and record["access"] == access
+            if same_content and same_access:
                 state.touch_document(doc_id, doc.version)
                 if doc_id in awaiting_change:
                     # The source went back to the live version: the waiting change is moot.
@@ -348,7 +355,7 @@ class Ingestor:
                 result.unchanged += 1
                 continue
             # When the confidentiality rules changed, a waiting change is judged again (and replaced).
-            if not recheck_all and librarian.waiting(doc_id, doc.fingerprint, confidential):
+            if not recheck_all and librarian.waiting(doc_id, doc.fingerprint, confidential, access):
                 if record:
                     state.touch_document(doc_id, doc.version)
                 result.unchanged += 1
@@ -356,7 +363,7 @@ class Ingestor:
             judged = connector.name != "decisions" and self.judge is not None
             started = time.perf_counter()
             try:
-                plan = librarian.plan(doc, confidential, record, judged=judged)
+                plan = librarian.plan(doc, confidential, record, judged=judged, access=access)
             except JUDGE_ERRORS as exc:
                 result.failed.append(f"{ref.title}: couldn't be judged, kept as it was ({exc})")
                 continue
@@ -403,6 +410,7 @@ class Ingestor:
                         "source": doc.source,
                         "url": doc.url,
                         "confidential": confidential,
+                        "access": access,
                     }
                 )
 

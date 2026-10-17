@@ -150,6 +150,19 @@ def charts(zs: ZeroStore, today: date | None = None) -> dict[str, Any]:
     }
 
 
+def tag_counts(docs) -> dict[str, int]:
+    """How many live documents carry each tag (`confidential` included)."""
+    from zerostore.access.roles import key_tags
+
+    counts: dict[str, int] = {}
+    for d in docs:
+        if not d["chunks"]:
+            continue
+        for tag in key_tags(d["access"]) + (["confidential"] if d["confidential"] else []):
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts
+
+
 def status(zs: ZeroStore, now: datetime | None = None) -> dict[str, Any]:
     from zerostore.librarian.ingestion import source_names
 
@@ -180,6 +193,7 @@ def status(zs: ZeroStore, now: datetime | None = None) -> dict[str, Any]:
             "id": t.id,
             "name": t.name,
             "level": t.level.value,
+            "role": t.role,
             "last_used_at": t.last_used_at,
             "questions_24h": asked.get(t.id, 0),
         }
@@ -197,6 +211,7 @@ def status(zs: ZeroStore, now: datetime | None = None) -> dict[str, Any]:
         "next_sync": next_sync(zs),
         "last_sync": last_sync(zs),
         "tokens": tokens,
+        "tags": tag_counts(docs.values()),
         "charts": charts(zs),
     }
 
