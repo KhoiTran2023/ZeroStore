@@ -102,7 +102,7 @@
     <div class="stack" style="margin-top:10px">
       <ol class="muted" style="margin:0;padding-left:20px">
         <li>In the Google Cloud console, pick or create a project and turn on the Google Drive API.</li>
-        <li>Set up the OAuth consent screen (External) and add your Google account as a test user.</li>
+        <li>Under Google Auth platform, fill in Branding (audience External), then publish the app under Audience, so the sign-in doesn't end after seven days.</li>
         <li>Create an OAuth client ID with application type <b>Desktop app</b>.</li>
         <li>Paste its client ID and secret here. They're saved in secrets.env next to zerostore.yaml, readable only by you.</li>
       </ol>
@@ -143,7 +143,7 @@
   <span class="cmd">creates a token and shows the line for Claude Code and the settings for Claude Desktop, Cursor and others · $ zerostore token create --name claude-code</span>
   {% if connector_url %}
   <div class="copyable">
-    <span class="cmd">Or add it like Gmail, with no token to copy: paste this address as a custom connector in Claude (Settings, Connectors), ChatGPT (chatgpt.com/plugins) or Grok (grok.com/connectors), then allow it on the page ZeroStore shows you</span>
+    <span class="cmd">Or add it like Gmail, with no token to copy: paste this address as a custom connector in Claude (Customize, Connectors), ChatGPT (chatgpt.com/plugins) or Grok (grok.com/connectors), then allow it on the page ZeroStore shows you</span>
     <pre class="copy" id="connector-url">{{ connector_url }}</pre>
     <span><button type="button" class="btn small" data-copy="connector-url">Copy</button></span>
   </div>

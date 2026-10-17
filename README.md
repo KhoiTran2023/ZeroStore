@@ -8,6 +8,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 
 ## Install
 
+New to servers and terminals? Follow [the step-by-step setup guide](docs/setup-guide.md). It covers every click, from creating the AWS server and pointing your domain at it to adding ZeroStore in Claude, ChatGPT and Grok.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh
 ```
@@ -74,7 +76,7 @@ The web UI is a client of the MCP server like any agent: it calls the owner tool
 
 On the setup page, "Sign in with Google Drive" sends you to Google, asks for read-only Drive access and brings you back, then lets you browse My Drive, folders shared with you and shared drives and add the folders ZeroStore should read. The sign-in is saved as `google-credentials.json` next to `zerostore.yaml`, readable only by you; "sign out of Google" revokes it and deletes the file. When ZeroStore runs on another machine, Google ends on a `http://localhost/...` address that doesn't load: paste it into the setup page to finish.
 
-Signing in needs a Google sign-in app (an OAuth client). Until ZeroStore ships with its own, make one in the Google Cloud console: turn on the Google Drive API, set up the OAuth consent screen with yourself as a test user, create an OAuth client ID of type **Desktop app**, and paste its ID and secret on the setup page (saved in `secrets.env` as `ZEROSTORE_GOOGLE_CLIENT_ID` and `ZEROSTORE_GOOGLE_CLIENT_SECRET`). A service-account key shared on your folders still works too: point `credentials:` at it.
+Signing in needs a Google sign-in app (an OAuth client). Until ZeroStore ships with its own, make one in the Google Cloud console: turn on the Google Drive API, fill in the Google Auth platform's Branding with audience External and publish the app under Audience (left in testing, Google ends the sign-in after seven days), create a client of type **Desktop app**, and paste its ID and secret on the setup page (saved in `secrets.env` as `ZEROSTORE_GOOGLE_CLIENT_ID` and `ZEROSTORE_GOOGLE_CLIENT_SECRET`). A service-account key shared on your folders still works too: point `credentials:` at it.
 
 ## Keep it running
 
@@ -156,7 +158,7 @@ Avoid a self-signed certificate or one issued for an IP address with `--tls-cert
 Claude, ChatGPT and Grok on the web and phone add ZeroStore the way they add Gmail, with no token to copy:
 
 1. Paste `https://<your address>/mcp` in the app:
-   - Claude: Settings, Connectors, Add custom connector.
+   - Claude: Customize, Connectors, + Add, Add custom connector.
    - ChatGPT: chatgpt.com/plugins, then "+", then "Add custom MCP server".
    - Grok: grok.com/connectors, then New Connector, then Custom.
 2. The app sends you to ZeroStore's web UI. Sign in if asked, pick the access level and role, and click Allow.
