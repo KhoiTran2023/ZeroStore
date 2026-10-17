@@ -22,12 +22,12 @@
 </form>
 {% else %}
 <section class="box">
-  <h2>servers</h2>
+  <h2>services</h2>
   <div class="scroll"><table class="nowrap">
-    <thead><tr><th>part</th><th>status</th><th>runs on</th><th>address</th></tr></thead>
-    <tbody>{% for s in servers %}<tr><td>{{ s.name }}</td><td class="ok">● ok</td><td class="muted">{{ s.where }}</td><td>{{ s.address }}</td></tr>{% endfor %}</tbody>
+    <thead><tr><th>part</th><th>status</th><th>what it says</th><th>address</th></tr></thead>
+    <tbody>{% for s in servers %}<tr><td>{{ s.name }}</td>{% include "_service_state.html" %}<td class="muted" style="white-space:normal;min-width:220px">{{ s.detail }}</td><td>{{ s.address }}</td></tr>{% endfor %}</tbody>
   </table></div>
-  <div class="cmd" style="margin-top:8px">everything runs in one program: $ zerostore serve --http · change the vector db and state db in the yaml view</div>
+  <div class="cmd" style="margin-top:8px">all four run in one program: $ zerostore serve --http · $ zerostore status shows the same from a terminal · change the vector db and state db in the yaml view</div>
 </section>
 
 <form method="post" action="/settings" class="stack">

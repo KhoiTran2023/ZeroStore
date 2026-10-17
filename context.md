@@ -59,7 +59,8 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 - Stage 8 (remembered keep answers): edits to long documents only send the changed chunks to the AI for keep and topic answers.
 - Claude's connectors (after stage 8): ZeroStore can be added under Claude's Settings, Connectors with its `https://<address>/mcp`; the owner allows it on the web UI and it gets its own token.
 - Roles and tags: information is tagged by where it lives, roles list the tags they see, and every token or connector can have a role; edited on the settings page or in zerostore.yaml.
-- Khoi's goal (Oct 17): agents (Claude, Grok, ChatGPT) connect with no certificate steps and call ZeroStore without being told; ingestion from Google Drive and GitHub; the web console, MCP server, vector DB and ingestion agent all up; docs with setup steps and behaviour changes; only authorised agents may call, and roles set in the web UI decide what each sees, matching the technical config. Done so far: roles and tags; ChatGPT and Grok sign-in. Still to do: showing the four services, a real ingestion check, and setup guides. Khoi was asked whether the four services run as one program (recommended) or separately.
+- Four services (after Khoi's goal): one program runs the web console, MCP server, vector DB and ingestion agent; `services.py` checks each (the server writes a heartbeat to the state file every 15 s), shown on the settings and status pages and in `zerostore status`. A real sync of the KhoiTran2023/ZeroStore repo with an `engineering` tag was checked by hand: a token without the role saw nothing, one with it saw the docs. Google Drive was not checked for real (no Google credentials here).
+- Khoi's goal (Oct 17): agents (Claude, Grok, ChatGPT) connect with no certificate steps and call ZeroStore without being told; ingestion from Google Drive and GitHub; the web console, MCP server, vector DB and ingestion agent all up; docs with setup steps and behaviour changes; only authorised agents may call, and roles set in the web UI decide what each sees, matching the technical config. Done so far: roles and tags; ChatGPT and Grok sign-in; the setup guide (docs/connect-agents.md); the four services' health; a real GitHub ingestion check; CHANGELOG.md for behaviour changes. Still to do: a real Google Drive check, which needs Google credentials. Khoi was asked whether the four services run as one program (recommended) or separately.
 - `zerostore report`: the spec and plan (Oct 13) say the stale-facts report was dropped, though the spec's CLI list still names `report`; Khoi was asked whether to drop it, build a what-changed report, or build the stale-facts card.
 
 ## Working on it
@@ -74,6 +75,7 @@ ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every A
 ZeroStore/
 ├── README.md                 Landing page: what it is, quick start, access levels, commands
 ├── context.md                Project context; ends with this file structure
+├── CHANGELOG.md              Behaviour changes for people running ZeroStore, newest first
 ├── LICENSE                   Apache License 2.0
 ├── pyproject.toml            Package info, dependencies, the `zerostore` command, ruff and pytest settings
 ├── zerostore.example.yaml    Every setting, with comments
@@ -90,6 +92,7 @@ ZeroStore/
 │   ├── cli.py                init, serve, ui, sync, review, reindex, token, status, connect, demo, service
 │   ├── config.py             Reads and checks zerostore.yaml (env-var and secrets.env expansion, defaults, clear errors)
 │   ├── insights.py           Read-only numbers for the status page and the status/activity tools
+│   ├── services.py           The four services (web console, MCP server, vector DB, ingestion agent): health checks and the server heartbeat
 │   ├── service.py            `zerostore service`: the systemd unit or launchd agent that keeps `serve --http` running
 │   ├── access/
 │   │   ├── tokens.py         Access levels and roles on tokens; token create, verify, list, revoke, auto-approve
@@ -147,7 +150,7 @@ ZeroStore/
                               judgment, retrieval, proposals, embeddings, scheduler, end-to-end sync, demo, web UI,
                               service and install.sh (faked service manager), Sign in with Google (fake Google),
                               connect commands (started with a short PATH, as Claude Desktop does), the connector
-                              sign-in (with the MCP SDK's OAuth client), roles and tags; servers.py runs a real server
+                              sign-in (with the MCP SDK's OAuth client), roles and tags, service health; servers.py runs a real server
                               on a free port
 ```
 
