@@ -4,6 +4,8 @@ import pytest
 
 from zerostore.app import ZeroStore
 from zerostore.config import parse_config
+from zerostore.demo import Demo
+from zerostore.librarian.ingestion import Ingestor
 from zerostore.store.embeddings import HashingEmbedder
 from zerostore.store.facts import Chunk
 
@@ -24,6 +26,20 @@ def config(tmp_path):
             "servers": {"vectordb": str(tmp_path / "facts.lance"), "statedb": str(tmp_path / "state.sqlite")},
         }
     )
+
+
+@pytest.fixture
+def demo(tmp_path, monkeypatch):
+    """The demo company, installed and synced, with its web UI config. Yields (Demo, ZeroStore)."""
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    demo = Demo(tmp_path / "demo")
+    demo.install()
+    zs = demo.open()
+    demo.create_tokens(zs)
+    Ingestor(zs).sync()
+    yield demo, zs
+    zs.close()
 
 
 @pytest.fixture

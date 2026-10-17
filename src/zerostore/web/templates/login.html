@@ -4,15 +4,17 @@
 {% block content %}
 <h1 class="m" style="font-size:20px">Sign in to ZeroStore</h1>
 {% if error %}<div class="flash warn" role="alert">{{ error }}</div>{% endif %}
+{% if next %}<p class="muted" style="margin:0">Sign in to answer an app that wants to connect to ZeroStore.</p>{% endif %}
 {% if code and not error %}
 <form method="post" action="/login" class="stack" hx-boost="false">
-  <input type="hidden" name="code" value="{{ code }}">
+  <input type="hidden" name="code" value="{{ code }}">{% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
   <p class="muted" style="margin:0">This one-time link signs you in with your owner token.</p>
   <div><button class="btn go" type="submit" autofocus>Sign in</button></div>
 </form>
 {% else %}
 <p class="muted" style="margin:0">Run <code>zerostore ui</code> for a one-time sign-in link, or paste your owner token: <code>zerostore init</code> saved it in the <code>owner-token</code> file next to your zerostore.yaml.</p>
 <form method="post" action="/login" class="stack" hx-boost="false">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
   <label><span>Owner token</span><input class="f m" type="password" name="token" autocomplete="off" required autofocus></label>
   <div><button class="btn go" type="submit">Sign in</button></div>
 </form>

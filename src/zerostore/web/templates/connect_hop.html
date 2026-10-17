@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Connecting · ZeroStore{% endblock %}
+{% block head_extra %}<meta http-equiv="refresh" content="0;url={{ next }}">{% endblock %}
+{% block main_class %}login{% endblock %}
+{% block content %}
+{# Claude sends the browser here from its own site, which leaves the session cookie behind;
+   this page moves on from ZeroStore itself, so the cookie comes along again. #}
+<h1 class="m" style="font-size:20px">Connecting to ZeroStore</h1>
+<div><a class="btn go" href="{{ next }}" hx-boost="false">Continue</a></div>
+{% endblock %}

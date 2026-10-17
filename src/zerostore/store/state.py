@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Columns added after a table first shipped: (table, column, declaration).
 # CREATE TABLE IF NOT EXISTS leaves older files alone, so these are added on open.
@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS judgments (
     answer TEXT NOT NULL,
     used_at TEXT NOT NULL,
     PRIMARY KEY (engine, key)
+);
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    info TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS locks (
     name TEXT PRIMARY KEY,
@@ -269,6 +274,16 @@ class StateDB:
         with self.tx() as cur:
             cur.execute(
                 "UPDATE documents SET version = '', fingerprint = '', chunks = 0, source_deleted_at = NULL"
+            )
+
+    # Apps registered to sign in as connectors ------------------------------
+
+    def save_oauth_client(self, client_id: str, info: str) -> None:
+        with self.tx() as cur:
+            cur.execute(
+                "INSERT INTO oauth_clients (client_id, info, created_at) VALUES (?, ?, ?)"
+                " ON CONFLICT(client_id) DO UPDATE SET info = excluded.info",
+                (client_id, info, utcnow()),
             )
 
     # Remembered judgments -------------------------------------------------

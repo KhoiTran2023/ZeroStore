@@ -2,43 +2,14 @@
 
 from __future__ import annotations
 
-import socket
-import threading
-import time
-from contextlib import contextmanager
-
 import anyio
 import httpx2
 import pytest
-import uvicorn
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from servers import running
 
 from zerostore.mcp.http import create_http_app, is_loopback
-
-
-@contextmanager
-def running(app):
-    # The socket is bound here and handed to uvicorn, so no other server can take the port
-    # between choosing it and listening on it.
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
-    thread.start()
-    deadline = time.time() + 10
-    while not server.started:
-        if time.time() > deadline:
-            raise RuntimeError("server did not start")
-        time.sleep(0.05)
-    try:
-        yield f"http://127.0.0.1:{port}/mcp"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
-        sock.close()
-        assert not thread.is_alive(), "the test server did not stop"
 
 
 @pytest.fixture

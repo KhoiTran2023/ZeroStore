@@ -30,19 +30,6 @@ BASE = "http://localhost"
 
 
 @pytest.fixture
-def demo(tmp_path, monkeypatch):
-    monkeypatch.delenv("JEV_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    demo = Demo(tmp_path / "demo")
-    demo.install()
-    zs = demo.open()
-    demo.create_tokens(zs)
-    Ingestor(zs).sync()
-    yield demo, zs
-    zs.close()
-
-
-@pytest.fixture
 def web(demo):
     d, zs = demo
     return TestClient(create_web_app(zs, d.config_path), base_url=BASE)

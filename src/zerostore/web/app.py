@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import re
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -18,12 +19,13 @@ from urllib.parse import quote, urlparse
 
 import anyio
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from zerostore import __version__
+from zerostore.access.oauth import APPROVE_PATH, ApprovalError, ConnectorAuth
 from zerostore.agents import commands as agent_commands
 from zerostore.app import ZeroStore
 from zerostore.config import config_env
@@ -211,6 +213,7 @@ def create_web_app(
     behind_proxy: bool = False,
     scheduled: bool = True,
     google_http: Callable[[], httpx.Client] | None = None,
+    connectors: ConnectorAuth | None = None,
 ) -> FastAPI:
     """The web UI for one ZeroStore.
 
@@ -218,6 +221,7 @@ def create_web_app(
     may be the public name and the public origin comes from X-Forwarded-Host.
     `scheduled`: this process runs timed syncs (shown on the status page).
     `google_http`: makes the HTTP client for talking to Google (tests pass a fake one).
+    `connectors`: the sign-in for Claude's connectors, which asks the owner on /connect/approve.
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -266,11 +270,7 @@ def create_web_app(
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
-        )
+        response.headers.setdefault("Content-Security-Policy", _csp())
         response.headers.setdefault("Cache-Control", "no-store")
         return response
 
@@ -328,10 +328,10 @@ def create_web_app(
     # Signing in ---------------------------------------------------------------
 
     @app.get("/login", response_class=HTMLResponse)
-    async def login_page(request: Request, code: str | None = None):
+    async def login_page(request: Request, code: str | None = None, next: str = ""):
         # A link only shows a button: the code is used up by the POST, so link previews
         # and prefetching can't spend it.
-        return await render(request, "login.html", None, "login", code=code or "")
+        return await render(request, "login.html", None, "login", code=code or "", next=_next_page(next))
 
     @app.post("/login")
     async def login(request: Request):
@@ -343,6 +343,7 @@ def create_web_app(
         form = await request.form()
         code = str(form.get("code") or "").strip()
         token = str(form.get("token") or "").strip()
+        then = _next_page(str(form.get("next") or ""))
         try:
             if code:
                 await anyio.to_thread.run_sync(auth.redeem_login_code, zs, code)
@@ -352,8 +353,8 @@ def create_web_app(
         except auth.LoginError as exc:
             failures.add(who)
             log.warning("web UI sign-in refused from %s: %s", who, exc)
-            return await render(request, "login.html", None, "login", error=str(exc))
-        return _signed_in(request, sessions, token)
+            return await render(request, "login.html", None, "login", error=str(exc), next=then)
+        return _signed_in(request, sessions, token, then or "/")
 
     @app.post("/logout")
     async def logout(request: Request):
@@ -595,7 +596,60 @@ def create_web_app(
             schedule=values["schedules"].get(cfg.sync.schedule, cfg.sync.schedule),
             rule_file=AGENT_RULE_FILE,
             scheduled=scheduled,
+            connector_url=mcp_url if connectors and mcp_url and mcp_url.startswith("https://") else None,
         )
+
+    # Claude's connectors -----------------------------------------------------------
+    # Claude (web, desktop, phone) adds ZeroStore under Settings, Connectors, then sends
+    # the owner's browser here to allow it. See access/oauth.py for the rest of the flow.
+
+    def connect_done(request: Request, message: str) -> Response:
+        return templates.TemplateResponse(request, "connect_done.html", {"message": message}, status_code=400)
+
+    @app.get(APPROVE_PATH, response_class=HTMLResponse)
+    async def connect_page(request: Request, hop: int = 0):
+        if connectors is None:
+            raise HTTPException(404)
+        try:
+            pending = connectors.pending(request.query_params.get("request", ""))
+        except ApprovalError as exc:
+            return connect_done(request, f"Not connected: {exc}.")
+        here = f"{APPROVE_PATH}?request={pending.id}"
+        session = sessions.get(request.cookies.get(COOKIE))
+        if session is None:
+            if not hop:
+                # Claude sends the browser here from its own site, which leaves the SameSite=Strict
+                # session cookie behind; one step from ZeroStore itself brings it along again.
+                return templates.TemplateResponse(request, "connect_hop.html", {"next": f"{here}&hop=1"})
+            return RedirectResponse(f"/login?next={quote(here, safe='')}", status_code=303)
+        response = await render(
+            request,
+            "connect_approve.html",
+            session,
+            "connect",
+            p=pending,
+            returns_to=urlparse(pending.returns_to).netloc or pending.returns_to,
+        )
+        # The answer's redirect goes back to the app, which form-action must allow on this page.
+        response.headers["Content-Security-Policy"] = _csp(_origin(pending.returns_to))
+        return response
+
+    @app.post(APPROVE_PATH)
+    async def connect_answer(request: Request):
+        session, form = await posted(request)
+        if connectors is None:
+            raise HTTPException(404)
+        allow = form.get("answer") == "allow"
+        try:
+            pending = connectors.pending(form.get("request", ""))
+            to = connectors.answer(pending.id, allow=allow, level=form.get("level") or "default")
+        except ApprovalError as exc:
+            return connect_done(request, f"Not connected: {exc}.")
+        if allow:
+            say(session, "ok", f"Connected {pending.name}. Revoke its token in Settings to disconnect it.")
+        response = RedirectResponse(to, status_code=303)
+        response.headers["Content-Security-Policy"] = _csp(_origin(pending.returns_to))
+        return response
 
     # Sign in with Google ---------------------------------------------------------
 
@@ -794,14 +848,42 @@ SYNC_POLL = (
 )
 
 
-def _signed_in(request: Request, sessions: auth.Sessions, token: str) -> Response:
+def _signed_in(request: Request, sessions: auth.Sessions, token: str, to: str = "/") -> Response:
     sid, _ = sessions.start(token)
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse(to, status_code=303)
     secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         COOKIE, sid, httponly=True, samesite="strict", secure=secure, path="/", max_age=auth.SESSION_TTL
     )
     return response
+
+
+def _csp(also_post_to: str = "") -> str:
+    form_action = f"'self' {also_post_to}".strip()
+    return (
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        f"frame-ancestors 'none'; form-action {form_action}; base-uri 'none'"
+    )
+
+
+def _origin(url: str) -> str:
+    """A CSP source for where a URL goes: its origin, or its scheme for an app's own (cursor:)."""
+    parts = urlparse(url)
+    if parts.scheme in ("http", "https"):
+        return f"{parts.scheme}://{parts.netloc}" if _HOST_PORT.fullmatch(parts.netloc) else ""
+    return f"{parts.scheme}:" if _SCHEME.fullmatch(parts.scheme) else ""
+
+
+_HOST_PORT = re.compile(r"([A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\])(:\d+)?")
+_SCHEME = re.compile(r"[a-z][a-z0-9+.\-]*")
+
+
+def _next_page(value: str) -> str:
+    """Where to go after signing in: only back to a connector's approval page."""
+    prefix = f"{APPROVE_PATH}?request="
+    if value.startswith(prefix) and re.fullmatch(r"[A-Za-z0-9_\-]+", value[len(prefix) :]):
+        return value
+    return ""
 
 
 def _is_loopback(host: str) -> bool:
