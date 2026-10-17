@@ -14,6 +14,14 @@ curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install
 
 On Linux or macOS, this installs the `zerostore` command (with uv, or with pipx if you already have it; uv brings Python 3.10 or newer when the machine has none), creates your settings and owner token in `~/.zerostore`, starts ZeroStore in the background and opens the setup page. Running it again updates ZeroStore and keeps your settings and data. While the repository is private, run it from a clone instead: `ZEROSTORE_PACKAGE=. sh install.sh`. `ZEROSTORE_NO_SERVICE=1` skips the background service and `ZEROSTORE_NO_OPEN=1` prints the setup link instead of opening it.
 
+On a server that agents such as ChatGPT, Grok and Claude reach over the internet, first point a domain's DNS A record at the server and open ports 80 and 443. Then install with the domain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --domain zs.example.com
+```
+
+It sets up Caddy, which gets a free Let's Encrypt certificate every agent trusts, and serves ZeroStore at `https://zs.example.com`. See [docs/connect-agents.md](docs/connect-agents.md#1-give-zerostore-a-public-https-address).
+
 ## Try it in 60 seconds
 
 ```bash
@@ -80,7 +88,7 @@ On Linux it's a systemd user unit, and `install` turns on lingering so it starts
 
 The service doesn't see your shell's environment variables, so keep keys in `secrets.env` next to `zerostore.yaml` (Settings in the web UI saves them there); `install` warns about any `${NAME}` in your settings that only your shell has.
 
-On an always-on server such as AWS EC2, put HTTPS with a real certificate in front (see [Agents on another computer](#agents-on-another-computer)) and run:
+On an always-on server such as AWS EC2, install with `--domain` (see [Install](#install)). It puts Caddy with a Let's Encrypt certificate in front and runs the service with the right options. If you already have a load balancer or proxy that handles HTTPS, run instead:
 
 ```bash
 zerostore service install --behind-https-proxy --public-url https://zs.example.com

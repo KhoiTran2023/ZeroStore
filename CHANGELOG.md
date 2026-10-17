@@ -6,6 +6,20 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### A public HTTPS address the standard way
+
+- `install.sh --domain zs.example.com` sets up a server for agents on the internet. It checks the DNS
+  record, installs Caddy from its official packages, adds the domain to Caddy, and starts ZeroStore
+  behind it at `https://zs.example.com`. Caddy gets a free Let's Encrypt certificate and renews it, so
+  there's nothing for anyone to trust or install. The installer finishes by running `zerostore doctor`.
+- What you do first: add a DNS A record for the domain pointing at the server (with an Elastic IP on AWS)
+  and open ports 80 and 443. A bare IP address isn't enough, because public certificates are issued for
+  names.
+- `zerostore doctor` now says when a domain has no DNS record. For plain HTTP or a self-signed
+  certificate, its fix points at `--domain`.
+- The guide (docs/connect-agents.md) leads with these standard steps for AWS and other servers. It covers
+  an existing load balancer (such as an AWS ALB with ACM) and tunnels for a computer with no domain.
+
 ### `zerostore doctor`
 
 - New command that checks everything an agent needs before you add ZeroStore to it: source keys and
