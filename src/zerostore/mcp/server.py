@@ -125,7 +125,7 @@ def _supports_elicitation(ctx: Context) -> bool:
 
 
 def tools_for(level: AccessLevel) -> set[str]:
-    names = {"search", "get_fact", "whats_changed", "list_sources"}
+    names = {"search", "get_fact", "fetch", "whats_changed", "list_sources"}
     if level.can_propose:
         names.add("propose_fact")
     if level.is_owner:
@@ -216,9 +216,12 @@ def build_server(
             return {
                 "answer": "not sure",
                 "facts": [],
+                "results": [],
                 "note": "Nothing in ZeroStore answers this reliably. Ask the user instead of guessing.",
             }
-        return {"facts": [_fact_view(r) for r in answer.facts]}
+        # `results` is the list ChatGPT's search and deep research read (id, title, url).
+        results = [{"id": r["id"], "title": r["title"], "url": r["source_url"]} for r in answer.facts]
+        return {"facts": [_fact_view(r) for r in answer.facts], "results": results}
 
     @register("get_fact", d.GET_FACT, read_only=True)
     def get_fact(id: str, ctx: Context) -> dict[str, Any]:
@@ -229,6 +232,22 @@ def build_server(
         if row is None:
             raise ToolError(f"no fact with id {id}")
         return _fact_view(row)
+
+    @register("fetch", d.FETCH, read_only=True)
+    def fetch(id: str, ctx: Context) -> dict[str, Any]:
+        caller = authorize(ctx, "fetch", id)
+        row = zs.facts.get(
+            id, include_confidential=caller.level.sees_confidential, hidden_tags=hidden(caller)
+        )
+        if row is None:
+            raise ToolError(f"no fact with id {id}")
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "text": row["text"],
+            "url": row["source_url"],
+            "metadata": {"source": row["source"], "updated_at": row["updated_at"]},
+        }
 
     @register("whats_changed", d.WHATS_CHANGED, read_only=True)
     def whats_changed(since: str, ctx: Context) -> dict[str, Any]:

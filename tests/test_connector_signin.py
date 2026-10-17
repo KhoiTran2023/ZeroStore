@@ -268,11 +268,11 @@ def test_setup_shows_the_connector_address_on_a_public_https_address(demo):
     client = TestClient(web, base_url="https://zs.example.com")
     client.post("/login", data={"token": d.owner_token()})
     page = client.get("/setup?step=3").text
-    assert "Add custom connector" in page and url in page
+    assert "custom connector" in page and url in page
 
     local = TestClient(create_web_app(zs, d.config_path), base_url=BASE)
     local.post("/login", data={"token": d.owner_token()})
-    assert "Add custom connector" not in local.get("/setup?step=3").text
+    assert "custom connector" not in local.get("/setup?step=3").text
 
 
 # A real MCP client ------------------------------------------------------------------
@@ -321,7 +321,10 @@ def test_an_mcp_client_signs_in_the_way_claude_does(demo):
             returned.update({k: v[0] for k, v in parse_qs(urlparse(back.headers["location"]).query).items()})
 
         async def wait_for_callback():
-            return AuthorizationCodeResult(code=returned["code"], state=returned.get("state"))
+            # `iss` (RFC 9207) is checked against the metadata's issuer, as ChatGPT does.
+            return AuthorizationCodeResult(
+                code=returned["code"], state=returned.get("state"), iss=returned["iss"]
+            )
 
         auth = OAuthClientProvider(
             server_url=url,
@@ -405,3 +408,129 @@ def test_an_app_can_disconnect_itself_but_never_the_owner(seeded):
     anyio.run(provider.revoke_token, anyio.run(provider.load_access_token, raw))
     assert anyio.run(provider.load_access_token, raw) is None
     assert anyio.run(provider.load_access_token, owner_raw) is not None
+
+
+# Apps that name a client ID metadata document (ChatGPT, Grok) ------------------------
+
+CHATGPT = "https://chatgpt.com/oauth/client.json"
+CHATGPT_CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect"
+
+
+def chatgpt_document(url):
+    async def read(asked):
+        assert asked == url
+        return {"client_id": url, "client_name": "ChatGPT", "redirect_uris": [CHATGPT_CALLBACK]}
+
+    return read
+
+
+def test_the_metadata_offers_documents_and_names_the_issuer(server):
+    found = server.get("/.well-known/oauth-authorization-server").json()
+    assert found["client_id_metadata_document_supported"] is True
+    assert found["authorization_response_iss_parameter_supported"] is True
+    assert "none" in found["token_endpoint_auth_methods_supported"]
+    assert found["registration_endpoint"] == f"{BASE}/register"  # registering still works
+
+
+def test_chatgpt_signs_in_with_its_metadata_document(server, demo, monkeypatch):
+    _, zs = demo
+    monkeypatch.setattr(oauth, "fetch_document", chatgpt_document(CHATGPT))
+    verifier, challenge = pkce()
+    response = server.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": CHATGPT,
+            "redirect_uri": CHATGPT_CALLBACK,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "gpt",
+            "resource": f"{BASE}/mcp",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 302, response.text
+    where = response.headers["location"][len(BASE) :]
+    sign_in(server, demo)
+    assert "Let ChatGPT use your ZeroStore?" in server.get(where).text
+    back = urlparse(answer(server, where).headers["location"])
+    query = parse_qs(back.query)
+    assert f"{back.scheme}://{back.netloc}{back.path}" == CHATGPT_CALLBACK
+    issuer = server.get("/.well-known/oauth-authorization-server").json()["issuer"]
+    assert query["iss"] == [issuer] and query["state"] == ["gpt"]
+
+    form = {
+        "grant_type": "authorization_code",
+        "code": query["code"][0],
+        "redirect_uri": CHATGPT_CALLBACK,
+        "client_id": CHATGPT,  # a public client: no secret, PKCE proves it
+        "code_verifier": verifier,
+        "resource": f"{BASE}/mcp",
+    }
+    made = server.post("/token", data=form)
+    assert made.status_code == 200, made.text
+    assert zs.tokens.verify(made.json()["access_token"]).name == "ChatGPT (connector)"
+
+
+def test_a_document_must_name_itself_and_the_callback(server, monkeypatch):
+    async def wrong(url):
+        return {"client_id": "https://evil.example/client.json", "redirect_uris": [CHATGPT_CALLBACK]}
+
+    monkeypatch.setattr(oauth, "fetch_document", wrong)
+    _, challenge = pkce()
+    params = {
+        "response_type": "code",
+        "client_id": CHATGPT,
+        "redirect_uri": CHATGPT_CALLBACK,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": "s",
+    }
+    response = server.get("/authorize", params=params, follow_redirects=False)
+    assert response.status_code == 400 and "/connect/approve" not in response.headers.get("location", "")
+
+    monkeypatch.setattr(oauth, "fetch_document", chatgpt_document(CHATGPT))
+    params["redirect_uri"] = "https://evil.example/steal"
+    response = server.get("/authorize", params=params, follow_redirects=False)
+    assert response.status_code == 400  # only the callbacks the document lists
+
+
+@pytest.mark.parametrize(
+    "client_id, expected",
+    [
+        (CHATGPT, True),
+        ("https://grok.com/oauth/mcp-client.json", True),
+        ("http://chatgpt.com/oauth/client.json", False),  # not https
+        ("https://chatgpt.com/", False),  # no path
+        ("https://chatgpt.com:8443/client.json", False),
+        ("https://user@chatgpt.com/client.json", False),
+        ("abc123", False),  # a registered client's id
+    ],
+)
+def test_which_client_ids_are_documents(client_id, expected):
+    assert oauth.is_document_url(client_id) is expected
+
+
+@pytest.mark.parametrize(
+    "url", ["https://localhost/client.json", "https://127.0.0.1/c.json", "https://10.1.2.3/c"]
+)
+def test_documents_are_never_read_from_this_computer_or_the_local_network(url):
+    with pytest.raises(oauth.DocumentError, match="isn't a public address"):
+        anyio.run(oauth.fetch_document, url)
+
+
+def test_claudes_published_document_is_accepted():
+    # As https://claude.ai/oauth/mcp-oauth-client-metadata served it on 2026-10-17.
+    url = "https://claude.ai/oauth/mcp-oauth-client-metadata"
+    document = {
+        "client_id": url,
+        "client_name": "Claude",
+        "client_uri": "https://claude.ai",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+    client = oauth.client_from_document(url, document)
+    assert client.client_name == "Claude" and client.token_endpoint_auth_method == "none"
+    assert [str(u) for u in client.redirect_uris] == ["https://claude.ai/api/mcp/auth_callback"]

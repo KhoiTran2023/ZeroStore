@@ -130,14 +130,19 @@ Run ZeroStore behind it with `zerostore service install --behind-https-proxy --p
 
 Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else.
 
-### Add it like Gmail (Claude's Connectors)
+### Add it like Gmail (Claude, ChatGPT, Grok)
 
-Claude on the web, in Claude Desktop and on the phone can add ZeroStore the way it adds Gmail, with no token to copy:
+Claude, ChatGPT and Grok on the web and phone add ZeroStore the way they add Gmail, with no token to copy:
 
-1. In Claude, open Settings, Connectors, Add custom connector, and paste `https://<your address>/mcp`.
-2. Claude sends you to ZeroStore's web UI. Sign in if asked, pick the access level (default or confidential), and click Allow.
+1. Paste `https://<your address>/mcp` in the app:
+   - Claude: Settings, Connectors, Add custom connector.
+   - ChatGPT: chatgpt.com/plugins, then "+", then "Add custom MCP server".
+   - Grok: grok.com/connectors, then New Connector, then Custom.
+2. The app sends you to ZeroStore's web UI. Sign in if asked, pick the access level and role, and click Allow.
 
-From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. The connection shows in your token list as "Claude (connector)"; revoke it there to disconnect. Claude's servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
+Step-by-step guides for every agent are in [docs/connect-agents.md](docs/connect-agents.md).
+
+From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. ChatGPT works the same once you turn the connector on for a conversation. The connection shows in your token list as "<app> (connector)"; revoke it there to disconnect. The apps' servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
 
 ## How access works
 
