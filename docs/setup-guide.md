@@ -288,7 +288,12 @@ Click **1 · your docs**. Connect any of Google Drive, GitHub and Linear. One is
 
 ### Google Drive
 
-Google asks every program that reads Drive to have its own "sign-in app". You make one once, in about ten minutes, then sign in with it.
+There are two ways to let ZeroStore read Drive. Both are read-only, and both use a Google Cloud project you create yourself (ZeroStore doesn't share one between installs).
+
+- **Your own sign-in app** (steps A to F below): ZeroStore reads what your Google account can see, and you pick folders by browsing.
+- **A service account key** (the [next section](#google-drive-with-a-service-account-key)): a key file for a robot Google account, like a personal access token. ZeroStore reads only the folders you share with it, so there's no consent screen, no warning page, and no sign-in to renew. Some company Google accounts don't allow these keys.
+
+Google asks every program that signs in to Drive to have its own "sign-in app". You make one once, in about ten minutes, then sign in with it.
 
 **A. Create a Google Cloud project**
 
@@ -335,6 +340,52 @@ While a sign-in app is "in testing", Google ends its sign-ins after seven days, 
 9. ZeroStore now says **Google Drive · signed in as** your email. Browse **My Drive**, **Shared with me** or **Shared drives**. Click a folder name to look inside it, and click **Add** next to each folder ZeroStore should read. It reads every folder inside the ones you add.
 
 ZeroStore only reads. It never changes, moves or deletes your files.
+
+### Google Drive with a service account key
+
+Do A and B from the section above (create the project and turn on the Google Drive API), then:
+
+**Create the robot account and its key**
+
+1. In the Google Cloud console, open menu ☰, **IAM & Admin**, **Service Accounts**. Check that the project picker at the top shows **ZeroStore**.
+2. Click **+ Create service account**. **Service account name:** `zerostore-reader`. Click **Create and continue**.
+3. Skip **Permissions** and **Principals with access**: click **Continue**, then **Done**. The robot needs no project roles, only access to your folders.
+4. In the list, copy the new account's **Email**, which looks like `zerostore-reader@your-project.iam.gserviceaccount.com`. You'll share folders with it.
+5. Click the email, open the **Keys** tab, click **Add key**, then **Create new key**. Choose **JSON** and click **Create**. A file ending in `.json` downloads to your computer. Keep it safe: anyone with it can read the folders you share.
+
+If Google says **Service account key creation is disabled**, your organization blocks these keys (the `iam.disableServiceAccountKeyCreation` policy). Use your own sign-in app instead, or ask your Google Workspace admin.
+
+**Share your folders with it**
+
+1. In [Google Drive](https://drive.google.com), right-click a folder ZeroStore should read and choose **Share**, then **Share** again.
+2. Paste the robot's email, set it to **Viewer**, untick **Notify people**, and click **Share** (or **Send**).
+3. Do the same for each folder. For a shared drive, add the email as a member with the **Viewer** role under **Manage members**.
+
+**Put the key on the server**
+
+1. On your computer, open the downloaded `.json` file in a plain text editor (on Windows, right-click it, **Open with**, **Notepad**; on a Mac, right-click it, **Open With**, **TextEdit**). Select everything (**Ctrl+A**, or **Cmd+A** on a Mac) and copy it.
+2. In the server's terminal, paste this and press **Enter**. The terminal then waits for the key, with no prompt:
+
+   ```bash
+   cat > ~/.zerostore/google-service-account.json
+   ```
+
+3. Paste the key you copied, press **Enter**, then press **Ctrl+D** to save it. The `$` prompt comes back.
+4. Make the file readable only by you:
+
+   ```bash
+   chmod 600 ~/.zerostore/google-service-account.json
+   ```
+
+5. Delete the downloaded `.json` file from your computer and empty the trash.
+
+**Add it in ZeroStore**
+
+1. On **1 · your docs**, open **GitHub, Linear, or a Google service account**.
+2. Tick **Google Drive**.
+3. **Folders:** the names of the folders you shared, separated by commas, exactly as Drive shows them, for example `Finance, Handbook`. If two shared folders have the same name, use `id:` and the code at the end of the folder's web address instead, for example `id:1AbCdEfGh...`.
+4. **Google credentials file:** `~/.zerostore/google-service-account.json`
+5. Click **Save**.
 
 ### GitHub
 
