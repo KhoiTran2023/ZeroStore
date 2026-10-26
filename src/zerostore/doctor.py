@@ -182,7 +182,10 @@ def _caused_by(exc: BaseException, kind: type[BaseException], text: str = "") ->
     return False
 
 
-DOMAIN_FIX = "point a domain name at this server, then install with --domain <name> (docs/connect-agents.md)"
+DOMAIN_FIX = (
+    "point a domain name at this server and install with --domain <name>, or install with --ip "
+    "on a server with a fixed public IP address (docs/connect-agents.md)"
+)
 
 
 def _address(base: str | None, client: httpx.Client) -> list[Check]:

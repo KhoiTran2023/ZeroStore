@@ -520,7 +520,10 @@ def domain_fakes(tmp_path, *, caddy: bool) -> dict[str, str]:
     fakes = tmp_path / "fakes"
     fakes.mkdir(exist_ok=True)
     tools = dict(DOMAIN_FAKES)
-    caddy_fake = LOGGED.format(name="caddy")
+    # `caddy version` answers like Caddy 2.11, the first release that gets IP address certificates.
+    caddy_fake = LOGGED.format(name="caddy") + (
+        '[ "$1" = version ] && echo "${FAKE_CADDY_VERSION:-v2.11.4} h1:x"\nexit 0\n'
+    )
     if caddy:
         tools["caddy"] = caddy_fake
     else:  # apt-get installs it
@@ -596,6 +599,77 @@ def test_installer_notes_a_domain_pointing_elsewhere(tmp_path):
 def test_installer_wants_just_the_domain_name(tmp_path, bad):
     result, calls = run_installer(tmp_path, "--domain", bad)
     assert result.returncode == 1 and "just the name" in result.stderr
+    assert calls == []
+
+
+@needs_sh
+def test_installer_serves_the_servers_ip_address_over_https(tmp_path):
+    env = domain_fakes(tmp_path, caddy=True)
+    result, calls = run_installer(tmp_path, "--ip", **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "This server's public IP address is 203.0.113.7." in result.stdout
+    caddyfile = (tmp_path / "Caddyfile").read_text()
+    assert (
+        "https://203.0.113.7 {\n\ttls {\n\t\tissuer acme {\n\t\t\tprofile shortlived\n\t\t}\n\t}\n"
+        "\treverse_proxy localhost:8765\n}"
+    ) in caddyfile
+    assert caddyfile.startswith(":80 {")
+    assert "sudo systemctl reload-or-restart caddy" in calls
+    zs = [c for c in calls if c.startswith("zerostore")]
+    assert (
+        zs[2] == "zerostore service install --port 8765 --behind-https-proxy --public-url https://203.0.113.7"
+    )
+    assert "zerostore doctor --url https://203.0.113.7" in zs
+    assert "Agents add ZeroStore with https://203.0.113.7/mcp" in result.stdout
+
+    # Running it again, with the address given, doesn't add the site twice.
+    again, _ = run_installer(tmp_path, "--ip=203.0.113.7", **env)
+    assert again.returncode == 0, again.stderr
+    assert (tmp_path / "Caddyfile").read_text().count("https://203.0.113.7 {") == 1
+    assert "Caddy already serves 203.0.113.7" in again.stdout
+
+
+@needs_sh
+def test_installer_notes_an_ip_that_isnt_this_servers(tmp_path):
+    env = domain_fakes(tmp_path, caddy=True)
+    result, _ = run_installer(tmp_path, "--ip=198.51.100.9", **env)
+    assert result.returncode == 0, result.stderr
+    assert "this server's public address is 203.0.113.7, not 198.51.100.9" in result.stdout
+    assert "https://198.51.100.9 {" in (tmp_path / "Caddyfile").read_text()
+
+
+@needs_sh
+def test_installer_needs_a_caddy_that_gets_ip_certificates(tmp_path):
+    env = {**domain_fakes(tmp_path, caddy=True), "FAKE_CADDY_VERSION": "v2.10.2"}
+    result, calls = run_installer(tmp_path, "--ip", **env)
+    assert result.returncode == 1
+    assert "Caddy v2.10.2 can't get a certificate for an IP address; 2.11 or newer can" in result.stderr
+    assert not any(c.startswith("zerostore service") for c in calls)
+    assert "203.0.113.7" not in (tmp_path / "Caddyfile").read_text()
+
+
+@needs_sh
+def test_installer_refuses_a_private_ip(tmp_path):
+    env = domain_fakes(tmp_path, caddy=True)
+    result, calls = run_installer(tmp_path, "--ip=172.31.5.10", **env)
+    assert result.returncode == 1 and "172.31.5.10 is a private address" in result.stderr
+    assert not any(c.startswith("zerostore service") or c.startswith("caddy") for c in calls)
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    ("args", "says"),
+    [
+        (["--ip=abc"], "IPv4 address"),
+        (["--ip=203.0.113"], "IPv4 address"),
+        (["--ip=203.0.113.7.1"], "IPv4 address"),
+        (["--ip=203..113.7"], "IPv4 address"),
+        (["--domain", "zs.example.com", "--ip"], "not both"),
+    ],
+)
+def test_installer_checks_the_ip_option(tmp_path, args, says):
+    result, calls = run_installer(tmp_path, *args)
+    assert result.returncode == 1 and says in result.stderr
     assert calls == []
 
 

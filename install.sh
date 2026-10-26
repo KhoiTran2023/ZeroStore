@@ -17,18 +17,29 @@
 # The installer then sets up Caddy, which gets a Let's Encrypt certificate for the
 # domain and renews it, and serves ZeroStore at https://<domain> (it needs sudo).
 #
+# With no domain, a cloud server with a fixed public IP address (an Elastic IP on
+# AWS) can use the IP itself; Let's Encrypt issues certificates for IP addresses:
+#
+#   curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --ip
+#
+# --ip finds the server's public IPv4 address; --ip=203.0.113.7 names it. Open ports
+# 80 and 443 first. Caddy renews the certificate every few days by itself.
+#
 # Optional environment variables:
 #   ZEROSTORE_PACKAGE     what to install (default: the GitHub repository)
 #   ZEROSTORE_HOME        where settings and data live (default: ~/.zerostore)
 #   ZEROSTORE_NO_SERVICE  1 to skip the background service
 #   ZEROSTORE_NO_OPEN     1 to print the setup link instead of opening the browser
 #   ZEROSTORE_DOMAIN      the same as --domain
+#   ZEROSTORE_IP          the same as --ip=<address>
 #   ZEROSTORE_PORT        the local port ZeroStore listens on behind Caddy (default: 8765)
 
 set -eu
 
 PACKAGE="${ZEROSTORE_PACKAGE:-git+https://github.com/KhoiTran2023/ZeroStore}"
 DOMAIN="${ZEROSTORE_DOMAIN:-}"
+IP="${ZEROSTORE_IP:-}"
+SITE=""
 PORT="${ZEROSTORE_PORT:-8765}"
 CADDYFILE="${ZEROSTORE_CADDYFILE:-/etc/caddy/Caddyfile}"
 
@@ -77,7 +88,7 @@ as_root() {
     elif has sudo; then
         sudo "$@"
     else
-        die "setting up HTTPS for $DOMAIN needs root. Install sudo, or run this as root."
+        die "setting up HTTPS for $SITE needs root. Install sudo, or run this as root."
     fi
 }
 
@@ -107,6 +118,36 @@ install_caddy() {
     has caddy || die "Caddy was installed but the caddy command can't be found."
 }
 
+# Let's Encrypt certificates for IP addresses need Caddy 2.11 or newer.
+check_caddy_for_ip() {
+    VERSION=$(caddy version 2>/dev/null | awk '{print $1}')
+    case "$VERSION" in
+        v2.[0-9] | v2.[0-9].* | v2.10 | v2.10.* | v1.*)
+            die "Caddy $VERSION can't get a certificate for an IP address; 2.11 or newer can. Update Caddy (https://caddyserver.com/docs/install), then run this again." ;;
+    esac
+}
+
+# The public IPv4 address this server is reached at, or nothing.
+public_ip() {
+    curl -fsS --max-time 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# Fills in IP when --ip came without an address, and notes an address that isn't this server's.
+check_ip() {
+    PUBLIC=$(public_ip)
+    if [ "$IP" = detect ]; then
+        [ -n "$PUBLIC" ] || die "couldn't find this server's public IP address. Give it: --ip=203.0.113.7"
+        IP="$PUBLIC"
+        say "This server's public IP address is $IP."
+    elif [ -n "$PUBLIC" ] && [ "$PUBLIC" != "$IP" ]; then
+        say "Note: this server's public address is $PUBLIC, not $IP. That's fine behind a load balancer; otherwise use --ip=$PUBLIC."
+    fi
+    case "$IP" in
+        10.* | 127.* | 169.254.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+            die "$IP is a private address, so no certificate authority can check it and agents on the internet can't reach it. Use the server's public IP address." ;;
+    esac
+}
+
 # Warns when the domain doesn't point at this server yet: the certificate can't be issued until it does.
 check_dns() {
     if has getent; then
@@ -119,7 +160,7 @@ check_dns() {
     if [ -z "$ADDRESSES" ]; then
         die "$DOMAIN has no DNS record yet. Add an A record pointing at this server's public IP address, wait a minute, then run this again."
     fi
-    PUBLIC=$(curl -fsS --max-time 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)
+    PUBLIC=$(public_ip)
     if [ -z "$PUBLIC" ]; then
         return 0
     fi
@@ -129,17 +170,29 @@ check_dns() {
     esac
 }
 
-# Adds a site for the domain to Caddy's settings (once) and reloads Caddy.
+# Adds a site for the domain or IP address to Caddy's settings (once) and reloads Caddy.
 setup_https() {
-    step "Setting up HTTPS for $DOMAIN"
-    check_dns
-    install_caddy
-    if [ -f "$CADDYFILE" ] && grep -qxF "$DOMAIN {" "$CADDYFILE"; then
-        say "Caddy already serves $DOMAIN ($CADDYFILE)."
+    if [ -n "$DOMAIN" ]; then
+        SITE="$DOMAIN"
+        step "Setting up HTTPS for $SITE"
+        check_dns
+        install_caddy
+        BLOCK=$(printf '%s {\n\treverse_proxy localhost:%s\n}' "$SITE" "$PORT")
     else
-        printf '\n# ZeroStore\n%s {\n\treverse_proxy localhost:%s\n}\n' "$DOMAIN" "$PORT" |
-            as_root tee -a "$CADDYFILE" >/dev/null
-        say "Added $DOMAIN to $CADDYFILE."
+        step "Setting up HTTPS for this server's IP address"
+        check_ip
+        SITE="$IP"
+        install_caddy
+        check_caddy_for_ip
+        # Let's Encrypt issues IP certificates only under its short-lived profile (about six days).
+        BLOCK=$(printf 'https://%s {\n\ttls {\n\t\tissuer acme {\n\t\t\tprofile shortlived\n\t\t}\n\t}\n\treverse_proxy localhost:%s\n}' "$SITE" "$PORT")
+    fi
+    FIRST=$(printf '%s\n' "$BLOCK" | head -n 1)
+    if [ -f "$CADDYFILE" ] && grep -qxF "$FIRST" "$CADDYFILE"; then
+        say "Caddy already serves $SITE ($CADDYFILE)."
+    else
+        printf '\n# ZeroStore\n%s\n' "$BLOCK" | as_root tee -a "$CADDYFILE" >/dev/null
+        say "Added $SITE to $CADDYFILE."
     fi
     if has systemctl; then
         as_root systemctl enable caddy >/dev/null 2>&1 || true
@@ -156,12 +209,24 @@ parse_args() {
         case "$1" in
             --domain) [ $# -ge 2 ] || die "--domain needs a name, like --domain zs.example.com"; DOMAIN="$2"; shift 2 ;;
             --domain=*) DOMAIN="${1#--domain=}"; shift ;;
-            *) die "unknown option $1 (the only option is --domain <name>)" ;;
+            --ip) IP=detect; shift ;;
+            --ip=*) IP="${1#--ip=}"; shift ;;
+            *) die "unknown option $1 (the options are --domain <name> and --ip)" ;;
         esac
     done
     case "$DOMAIN" in
         "") ;;
         http://* | https://* | */* | *:*) die "give --domain just the name, like zs.example.com" ;;
+    esac
+    if [ -n "$DOMAIN" ] && [ -n "$IP" ]; then
+        die "use --domain or --ip, not both"
+    fi
+    case "$IP" in
+        "" | detect) ;;
+        *[!0-9.]* | *..* | .* | *.) die "give --ip an IPv4 address, like --ip=203.0.113.7, or just --ip to find it" ;;
+        *.*.*.*.*) die "give --ip an IPv4 address, like --ip=203.0.113.7" ;;
+        *.*.*.*) ;;
+        *) die "give --ip an IPv4 address, like --ip=203.0.113.7" ;;
     esac
 }
 
@@ -209,9 +274,9 @@ main() {
     step "Creating your settings and owner token"
     "$ZS" init --no-rule
 
-    if [ -n "$DOMAIN" ]; then
+    if [ -n "$DOMAIN" ] || [ -n "$IP" ]; then
         setup_https
-        set -- --port "$PORT" --behind-https-proxy --public-url "https://$DOMAIN"
+        set -- --port "$PORT" --behind-https-proxy --public-url "https://$SITE"
     else
         set --
     fi
@@ -234,9 +299,9 @@ main() {
         if [ "${ZEROSTORE_NO_OPEN:-}" = 1 ]; then "$ZS" ui --no-open; else "$ZS" ui; fi
     fi
 
-    if [ -n "$DOMAIN" ] && [ "$RUNNING" = 1 ]; then
-        step "Checking https://$DOMAIN the way agents will reach it"
-        "$ZS" doctor --url "https://$DOMAIN" || say "Caddy may still be getting the certificate: run \`zerostore doctor --url https://$DOMAIN\` again in a minute."
+    if [ -n "$SITE" ] && [ "$RUNNING" = 1 ]; then
+        step "Checking https://$SITE the way agents will reach it"
+        "$ZS" doctor --url "https://$SITE" || say "Caddy may still be getting the certificate: run \`zerostore doctor --url https://$SITE\` again in a minute."
     fi
 
     step "ZeroStore is installed"
@@ -245,8 +310,8 @@ main() {
         say "  export PATH=\"$BIN:\$PATH\""
     fi
     say "Next: on the setup page, connect your docs, add your AI key and connect your agents."
-    if [ -n "$DOMAIN" ]; then
-        say "Agents add ZeroStore with https://$DOMAIN/mcp (docs/connect-agents.md)."
+    if [ -n "$SITE" ]; then
+        say "Agents add ZeroStore with https://$SITE/mcp (docs/connect-agents.md)."
     fi
     say "Later: \`zerostore ui\` opens the web UI signed in; \`zerostore service status\` shows the server."
 }

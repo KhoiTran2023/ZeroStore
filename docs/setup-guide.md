@@ -81,7 +81,9 @@ A terminal is a window where you type commands instead of clicking. In this guid
 
 ## Part 1. Choose your web address
 
-ZeroStore needs a web address (a domain name) because Claude, ChatGPT and Grok only connect to secure `https://` addresses, and the free certificate that makes an address secure is issued for names, not bare numbers.
+ZeroStore needs a secure `https://` web address, because Claude, ChatGPT and Grok only connect to those. A domain name is the standard way, and it's what this guide uses.
+
+> **No domain?** You can use the server's fixed IP address itself, such as `https://203.0.113.7`. Do Parts 2 and 3, skip Part 4, and in Part 6 replace `--domain zs.example.com` with `--ip`. Everywhere else, use `https://` and your Elastic IP in place of `https://zs.example.com`. The free certificate for an IP address lasts about six days and renews by itself. A domain is easier to remember and survives a move to a new server, so it's the better long-term choice.
 
 Use a **subdomain** of a domain you already have, such as `zs.yourcompany.com`. It doesn't affect your website or email.
 
