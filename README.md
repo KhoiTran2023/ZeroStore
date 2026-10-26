@@ -22,7 +22,7 @@ On a server that agents such as ChatGPT, Grok and Claude reach over the internet
 curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --domain zs.example.com
 ```
 
-It sets up Caddy, which gets a free Let's Encrypt certificate every agent trusts, and serves ZeroStore at `https://zs.example.com`. See [docs/connect-agents.md](docs/connect-agents.md#1-give-zerostore-a-public-https-address).
+It sets up Caddy, which gets a free Let's Encrypt certificate every agent trusts, and serves ZeroStore at `https://zs.example.com`. With no domain, a server with a fixed public IP address (an Elastic IP on AWS) can install with `--ip` instead and serve `https://<its IP>`, because Let's Encrypt also issues certificates for IP addresses. See [docs/connect-agents.md](docs/connect-agents.md#1-give-zerostore-a-public-https-address).
 
 ## Try it in 60 seconds
 
@@ -151,7 +151,7 @@ Give the server an HTTPS address with a certificate that every computer already 
 
 Run ZeroStore behind it with `zerostore service install --behind-https-proxy --public-url https://<that address>` (it keeps listening on `localhost` only). The setup page then shows the `claude mcp add --transport http` line with that address.
 
-Avoid a self-signed certificate or one issued for an IP address with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else.
+Avoid a self-signed or privately issued certificate with `--tls-cert`: every computer that connects would have to trust your `root.crt` first (Node apps such as Claude Code also need `NODE_EXTRA_CA_CERTS`), which breaks handing ZeroStore to someone else.
 
 ### Add it like Gmail (Claude, ChatGPT, Grok)
 

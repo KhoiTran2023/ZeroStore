@@ -6,6 +6,17 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### HTTPS on a server's IP address, with no domain
+
+- `install.sh --ip` serves ZeroStore at `https://<the server's public IP>`. Let's Encrypt has issued certificates for
+  IP addresses since January 2026, and Caddy 2.11 gets them, so agents trust the address with nothing to install.
+- `--ip` finds the public IPv4 address, or `--ip=203.0.113.7` names it. It refuses private addresses and a Caddy
+  older than 2.11.
+- What you do first: give the server a fixed public IP address (an Elastic IP on AWS) and open ports 80 and 443.
+  The certificate lasts about six days, and Caddy renews it by itself.
+- This corrects the earlier note that a bare IP address can't work. A domain is still recommended for anything
+  long-term. `zerostore doctor`'s fixes now mention `--ip` next to `--domain`.
+
 ### A step-by-step setup guide
 
 - New: [docs/setup-guide.md](docs/setup-guide.md) walks someone with no technical background through every click and

@@ -30,7 +30,7 @@ These apps connect from their makers' servers, so ZeroStore needs a public HTTPS
 
 ### 1. Give ZeroStore a public HTTPS address
 
-This is the same setup as any website: a domain name, a DNS record, and a free certificate from Let's Encrypt. There's no certificate to install on anyone's computer, and a bare IP address won't work, because public certificates are issued for names.
+This is the same setup as any website: a domain name, a DNS record, and a free certificate from Let's Encrypt. There's no certificate to install on anyone's computer. A server with a fixed public IP address can also skip the domain and use the IP itself (see **With no domain** below).
 
 **On a server (AWS EC2 or any cloud VM, Linux):**
 
@@ -43,6 +43,14 @@ This is the same setup as any website: a domain name, a DNS record, and a free c
    ```
 
 The installer checks the DNS record and installs Caddy from its official packages (apt or dnf, which needs sudo). It adds the domain to `/etc/caddy/Caddyfile`, and starts ZeroStore at `https://zs.example.com` on `localhost` behind Caddy. Caddy gets the certificate and renews it. The installer then runs `zerostore doctor` to check the address the way agents reach it.
+
+**With no domain, on a server with a fixed public IP address:** Let's Encrypt has issued certificates for IP addresses since January 2026, so `https://203.0.113.7` can be a trusted address too. Attach an Elastic IP on AWS (the certificate is for that address), open ports 80 and 443, then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --ip
+```
+
+`--ip` finds the server's public IPv4 address (`--ip=203.0.113.7` names it). It needs Caddy 2.11 or newer, which the installer brings. These certificates last about six days, and Caddy renews them by itself, so keep Caddy running. Agents then use `https://203.0.113.7/mcp`. A domain is still the better choice for anything long-term: it survives a change of server, and people can remember it.
 
 **Behind a load balancer or proxy you already run** (an AWS Application Load Balancer with an ACM certificate, nginx, Cloudflare): send its traffic to port 8765, then start ZeroStore with the address people use:
 
