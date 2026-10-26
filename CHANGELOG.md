@@ -6,6 +6,20 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### A step-by-step setup guide
+
+- New: [docs/setup-guide.md](docs/setup-guide.md) walks someone with no technical background through every click and
+  command. It covers creating the AWS server, buying a domain, adding the DNS record at Cloudflare, Route 53,
+  Namecheap, GoDaddy or Squarespace, installing, connecting Google Drive, GitHub and Linear, adding an AI key, and
+  adding ZeroStore to Claude, ChatGPT and Grok. It ends with everyday tasks and a table of common problems.
+- For Google Drive, the guide offers a service account key next to your own sign-in app: a key file, like a personal
+  access token, that reads only the folders you share with it, with no consent screen or sign-in to renew. ZeroStore
+  doesn't ship a shared Google sign-in app; each install uses its own Google Cloud project.
+- Google's sign-in app should now be **published** (Google Auth platform, Audience, Publish app). Left in testing,
+  Google ends its sign-ins after seven days and Drive stops syncing. The setup page and README say so.
+- Claude adds custom connectors under **Customize, Connectors** now. The setup page, README and
+  docs/connect-agents.md use the new path.
+
 ### A public HTTPS address the standard way
 
 - `install.sh --domain zs.example.com` sets up a server for agents on the internet. It checks the DNS

@@ -2,6 +2,8 @@
 
 Every agent reaches ZeroStore through its MCP server. Pick the way that fits where the agent runs. No way below asks you to install or trust a certificate.
 
+New to servers and terminals? [docs/setup-guide.md](setup-guide.md) walks through everything click by click: the AWS server, the domain and its DNS record at Cloudflare, Route 53, Namecheap, GoDaddy or Squarespace, the install, your sources, and adding ZeroStore to each app.
+
 | Agent | Runs where | How it connects | What you paste |
 |---|---|---|---|
 | Claude Code | your computer | starts ZeroStore itself (stdio) | one `claude mcp add` line |
@@ -64,7 +66,7 @@ It calls the public address with only the public certificate authorities, as Cha
 
 Each app sends you to a ZeroStore page that asks "Let <app> use your ZeroStore?". Sign in if asked, pick the access level and role, and click Allow. The app gets its own token, shown in Settings as "<app> (connector)". Revoke that token to disconnect it.
 
-- **Claude:** Settings, Connectors, Add custom connector, then paste the address.
+- **Claude:** Customize, Connectors, + Add, Add custom connector, then paste the address. On Team and Enterprise, an Owner adds it under Organization settings, Connectors, and members click Connect.
 - **ChatGPT:** open chatgpt.com/plugins, choose "+", then "Add custom MCP server". Paste the address and choose OAuth sign-in.
   - ChatGPT Business, Enterprise and Edu can use every ZeroStore tool, including proposing facts. On Business, only an admin or owner can add it.
   - Pro allows read-only use.
