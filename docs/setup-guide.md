@@ -574,7 +574,13 @@ Open the server's terminal (Part 5) and paste the line you need.
 | Update ZeroStore to the newest version | the same install command as Part 6. Your settings and data stay. |
 | Restart ZeroStore | `systemctl --user restart zerostore.service` |
 
-**Stopping for good:** in the EC2 console, select the instance, then **Instance state**, **Terminate (delete) instance**. Then open **Elastic IPs**, select yours, click **Actions**, **Release Elastic IP addresses**. An Elastic IP you keep still costs money. Delete the A record from Part 4 too.
+**Removing ZeroStore from a computer or server:** paste this. It stops ZeroStore, removes the `zerostore` command and takes its site out of Caddy. Your settings and data stay unless you add ` --delete-data` at the end. While the repository is private, run `sh install.sh --uninstall` inside the `ZeroStore` folder instead.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --uninstall
+```
+
+**Stopping the server for good:** in the EC2 console, select the instance, then **Instance state**, **Terminate (delete) instance**. Then open **Elastic IPs**, select yours, click **Actions**, **Release Elastic IP addresses**. An Elastic IP you keep still costs money. Delete the A record from Part 4 too.
 
 ## When something goes wrong
 

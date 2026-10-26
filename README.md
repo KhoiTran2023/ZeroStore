@@ -16,6 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install
 
 On Linux or macOS, this installs the `zerostore` command (with uv, or with pipx if you already have it; uv brings Python 3.10 or newer when the machine has none), creates your settings and owner token in `~/.zerostore`, starts ZeroStore in the background and opens the setup page. Running it again updates ZeroStore and keeps your settings and data. While the repository is private, run it from a clone instead: `ZEROSTORE_PACKAGE=. sh install.sh`. `ZEROSTORE_NO_SERVICE=1` skips the background service and `ZEROSTORE_NO_OPEN=1` prints the setup link instead of opening it.
 
+To remove ZeroStore, run the installer with `--uninstall` (`sh -s -- --uninstall`, or `sh install.sh --uninstall` from a clone). It stops the background service, removes the `zerostore` command, and takes ZeroStore's site out of Caddy. Your settings and data in `~/.zerostore` stay for a reinstall unless you add `--delete-data`. uv and Caddy stay, because other programs may use them, and agents you connected keep listing ZeroStore until you remove it there (`claude mcp remove zerostore` for Claude Code).
+
 On a server that agents such as ChatGPT, Grok and Claude reach over the internet, first point a domain's DNS A record at the server and open ports 80 and 443. Then install with the domain:
 
 ```bash

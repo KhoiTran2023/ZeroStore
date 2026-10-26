@@ -432,7 +432,10 @@ exit 0
 EOS
     chmod +x "$TOOLS/zerostore" ;;
   "tool dir") echo "$TOOLS" ;;
+  "tool list") [ -x "$TOOLS/zerostore" ] && echo "zerostore v0.1.0" && echo "- zerostore" ;;
+  "tool uninstall") rm -f "$TOOLS/zerostore" ;;
 esac
+exit 0
 """
 
 
@@ -668,6 +671,71 @@ def test_installer_refuses_a_private_ip(tmp_path):
     ],
 )
 def test_installer_checks_the_ip_option(tmp_path, args, says):
+    result, calls = run_installer(tmp_path, *args)
+    assert result.returncode == 1 and says in result.stderr
+    assert calls == []
+
+
+# --- install.sh --uninstall ---------------------------------------------------
+
+
+@needs_sh
+def test_uninstall_removes_the_service_and_command_and_keeps_data(tmp_path):
+    installed, _ = run_installer(tmp_path, ZEROSTORE_NO_OPEN="1")
+    assert installed.returncode == 0, installed.stderr
+    (tmp_path / ".zerostore").mkdir()
+    (tmp_path / ".zerostore" / "zerostore.yaml").write_text("sources: {}\n")
+    result, calls = run_installer(tmp_path, "--uninstall")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.index("zerostore service uninstall") < calls.index("uv tool uninstall zerostore")
+    assert not (tmp_path / "tools" / "zerostore").exists()
+    assert (tmp_path / ".zerostore" / "zerostore.yaml").exists()
+    assert "Kept " in result.stdout and "rm -rf" in result.stdout
+    assert "claude mcp remove zerostore" in result.stdout
+    assert not any(c.startswith("uv tool install") for c in calls)
+
+
+@needs_sh
+def test_uninstall_can_delete_the_data_too(tmp_path):
+    run_installer(tmp_path, ZEROSTORE_NO_OPEN="1")
+    (tmp_path / ".zerostore").mkdir()
+    result, _ = run_installer(tmp_path, "--uninstall", "--delete-data")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / ".zerostore").exists()
+    assert "Deleted " in result.stdout
+
+
+@needs_sh
+def test_uninstall_takes_zerostores_site_out_of_caddy(tmp_path):
+    env = domain_fakes(tmp_path, caddy=True)
+    installed, _ = run_installer(tmp_path, "--ip", **env)
+    assert installed.returncode == 0, installed.stderr
+    assert "# ZeroStore" in (tmp_path / "Caddyfile").read_text()
+    result, calls = run_installer(tmp_path, "--uninstall", **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    kept = (tmp_path / "Caddyfile").read_text().strip()
+    assert kept == ":80 {\n\troot * /usr/share/caddy\n\tfile_server\n}"
+    assert "sudo systemctl reload caddy" in calls
+    assert "Caddy itself stays" in result.stdout
+
+
+@needs_sh
+def test_uninstall_when_nothing_is_installed(tmp_path):
+    result, calls = run_installer(tmp_path, "--uninstall")
+    assert result.returncode == 0, result.stderr
+    assert "no service to stop" in result.stdout
+    assert "nothing to remove" in result.stdout
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    ("args", "says"),
+    [
+        (["--delete-data"], "--delete-data goes with --uninstall"),
+        (["--uninstall", "--ip"], "--uninstall takes no --domain or --ip"),
+    ],
+)
+def test_uninstall_options_are_checked(tmp_path, args, says):
     result, calls = run_installer(tmp_path, *args)
     assert result.returncode == 1 and says in result.stderr
     assert calls == []
