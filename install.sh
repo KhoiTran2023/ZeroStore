@@ -213,7 +213,9 @@ setup_https() {
 
 # Takes this install's site out of Caddy's settings: the "# ZeroStore" line and the block after it.
 remove_caddy_site() {
-    [ -f "$CADDYFILE" ] && grep -qxF "# ZeroStore" "$CADDYFILE" || return 0
+    if [ ! -f "$CADDYFILE" ] || ! grep -qxF "# ZeroStore" "$CADDYFILE"; then
+        return 0
+    fi
     KEPT=$(mktemp)
     awk '$0 == "# ZeroStore" { skip = 1; next } skip && $0 == "}" { skip = 0; next } !skip' "$CADDYFILE" > "$KEPT"
     as_root cp "$KEPT" "$CADDYFILE"
@@ -235,8 +237,12 @@ uninstall() {
             break
         fi
     done
+    UV_BIN=""
+    if [ -n "$UV" ]; then
+        UV_BIN=$("$UV" tool dir --bin 2>/dev/null || true)
+    fi
     ZS=""
-    for candidate in "$( [ -n "$UV" ] && "$UV" tool dir --bin 2>/dev/null || true)/zerostore" "$(command -v zerostore 2>/dev/null || true)" "$HOME/.local/bin/zerostore"; do
+    for candidate in "$UV_BIN/zerostore" "$(command -v zerostore 2>/dev/null || true)" "$HOME/.local/bin/zerostore"; do
         if [ -x "$candidate" ] && [ ! -d "$candidate" ]; then
             ZS="$candidate"
             break
