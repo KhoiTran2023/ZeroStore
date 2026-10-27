@@ -25,6 +25,11 @@
 # --ip finds the server's public IPv4 address; --ip=203.0.113.7 names it. Open ports
 # 80 and 443 first. Caddy renews the certificate every few days by itself.
 #
+# To remove ZeroStore (the service, the command, and its site in Caddy), keeping your
+# settings and data in ~/.zerostore; add --delete-data to delete those too:
+#
+#   curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --uninstall
+#
 # Optional environment variables:
 #   ZEROSTORE_PACKAGE     what to install (default: the GitHub repository)
 #   ZEROSTORE_HOME        where settings and data live (default: ~/.zerostore)
@@ -40,6 +45,8 @@ PACKAGE="${ZEROSTORE_PACKAGE:-git+https://github.com/KhoiTran2023/ZeroStore}"
 DOMAIN="${ZEROSTORE_DOMAIN:-}"
 IP="${ZEROSTORE_IP:-}"
 SITE=""
+UNINSTALL=0
+DELETE_DATA=0
 PORT="${ZEROSTORE_PORT:-8765}"
 CADDYFILE="${ZEROSTORE_CADDYFILE:-/etc/caddy/Caddyfile}"
 
@@ -88,7 +95,7 @@ as_root() {
     elif has sudo; then
         sudo "$@"
     else
-        die "setting up HTTPS for $SITE needs root. Install sudo, or run this as root."
+        die "changing Caddy's settings needs root. Install sudo, or run this as root."
     fi
 }
 
@@ -204,6 +211,78 @@ setup_https() {
     fi
 }
 
+# Takes this install's site out of Caddy's settings: the "# ZeroStore" line and the block after it.
+remove_caddy_site() {
+    if [ ! -f "$CADDYFILE" ] || ! grep -qxF "# ZeroStore" "$CADDYFILE"; then
+        return 0
+    fi
+    KEPT=$(mktemp)
+    awk '$0 == "# ZeroStore" { skip = 1; next } skip && $0 == "}" { skip = 0; next } !skip' "$CADDYFILE" > "$KEPT"
+    as_root cp "$KEPT" "$CADDYFILE"
+    rm -f "$KEPT"
+    say "Removed ZeroStore's site from $CADDYFILE. Caddy itself stays; remove it with your package manager if nothing else uses it."
+    if has systemctl; then
+        as_root systemctl reload caddy >/dev/null 2>&1 || true
+    elif has brew; then
+        brew services restart caddy >/dev/null 2>&1 || true
+    fi
+}
+
+uninstall() {
+    # A new terminal may not have uv's folder on PATH yet, so look where the installer puts it too.
+    UV=""
+    for candidate in "$(command -v uv 2>/dev/null || true)" "${XDG_BIN_HOME:-$HOME/.local/bin}/uv" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            UV="$candidate"
+            break
+        fi
+    done
+    UV_BIN=""
+    if [ -n "$UV" ]; then
+        UV_BIN=$("$UV" tool dir --bin 2>/dev/null || true)
+    fi
+    ZS=""
+    for candidate in "$UV_BIN/zerostore" "$(command -v zerostore 2>/dev/null || true)" "$HOME/.local/bin/zerostore"; do
+        if [ -x "$candidate" ] && [ ! -d "$candidate" ]; then
+            ZS="$candidate"
+            break
+        fi
+    done
+
+    step "Stopping the background service"
+    if [ -n "$ZS" ]; then
+        "$ZS" service uninstall || say "The service couldn't be removed (see above); carrying on."
+    else
+        say "The zerostore command isn't here, so there's no service to stop."
+    fi
+
+    step "Removing the zerostore command"
+    if [ -n "$UV" ] && "$UV" tool list 2>/dev/null | grep -q '^zerostore '; then
+        "$UV" tool uninstall zerostore
+    elif has pipx && pipx list --short 2>/dev/null | grep -q '^zerostore '; then
+        pipx uninstall zerostore
+    else
+        say "It wasn't installed with uv or pipx; nothing to remove."
+    fi
+
+    remove_caddy_site
+
+    HOME_DIR="${ZEROSTORE_HOME:-$HOME/.zerostore}"
+    step "Your settings and data"
+    if [ ! -d "$HOME_DIR" ]; then
+        say "$HOME_DIR isn't here."
+    elif [ "$DELETE_DATA" = 1 ]; then
+        rm -rf "$HOME_DIR"
+        say "Deleted $HOME_DIR (settings, tokens, keys and the fact store)."
+    else
+        say "Kept $HOME_DIR (settings, tokens, keys and the fact store), so a reinstall picks up where you left off."
+        say "To delete it too: rm -rf \"$HOME_DIR\""
+    fi
+
+    step "ZeroStore is uninstalled"
+    say "Agents you connected still list it: remove it there too (Claude Code: claude mcp remove zerostore; Claude, ChatGPT and Grok: their connector settings)."
+}
+
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -211,7 +290,9 @@ parse_args() {
             --domain=*) DOMAIN="${1#--domain=}"; shift ;;
             --ip) IP=detect; shift ;;
             --ip=*) IP="${1#--ip=}"; shift ;;
-            *) die "unknown option $1 (the options are --domain <name> and --ip)" ;;
+            --uninstall) UNINSTALL=1; shift ;;
+            --delete-data) DELETE_DATA=1; shift ;;
+            *) die "unknown option $1 (the options are --domain <name>, --ip, --uninstall and --delete-data)" ;;
         esac
     done
     case "$DOMAIN" in
@@ -220,6 +301,12 @@ parse_args() {
     esac
     if [ -n "$DOMAIN" ] && [ -n "$IP" ]; then
         die "use --domain or --ip, not both"
+    fi
+    if [ "$UNINSTALL" = 1 ] && { [ -n "$DOMAIN" ] || [ -n "$IP" ]; }; then
+        die "--uninstall takes no --domain or --ip"
+    fi
+    if [ "$DELETE_DATA" = 1 ] && [ "$UNINSTALL" = 0 ]; then
+        die "--delete-data goes with --uninstall"
     fi
     case "$IP" in
         "" | detect) ;;
@@ -232,6 +319,10 @@ parse_args() {
 
 main() {
     parse_args "$@"
+    if [ "$UNINSTALL" = 1 ]; then
+        uninstall
+        return 0
+    fi
     case "$(uname -s)" in
         Linux | Darwin) ;;
         *) die "this installer is for Linux and macOS. Elsewhere, run: pipx install $PACKAGE" ;;

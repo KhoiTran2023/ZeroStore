@@ -6,6 +6,14 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### Uninstall in one step
+
+- `install.sh --uninstall` stops the background service, removes the `zerostore` command (uv or pipx), and takes
+  ZeroStore's site out of Caddy's settings. It keeps `~/.zerostore` (settings, tokens, keys, the fact store) for a
+  reinstall; `--delete-data` deletes it too.
+- uv and Caddy stay, since other programs may use them. Agents you connected keep listing ZeroStore until you remove
+  it in each one.
+
 ### HTTPS on a server's IP address, with no domain
 
 - `install.sh --ip` serves ZeroStore at `https://<the server's public IP>`. Let's Encrypt has issued certificates for
