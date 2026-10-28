@@ -85,6 +85,13 @@ def test_status_json(home):
     assert info["documents"] == 0 and info["active_tokens"] == 1 and info["sources_configured"] == []
 
 
+def test_status_counts_approved_decisions_as_a_source(home):
+    zs("init", "--no-rule")
+    (home / "decisions.md").write_text("# Approved decisions\n\n## Refunds\n\nFull refund within 30 days.\n")
+    assert json.loads(zs("status", "--json").output)["sources_configured"] == ["decisions"]
+    assert "Sources:          decisions" in zs("status").output
+
+
 def test_commands_without_init_explain_what_to_do(home):
     result = zs("status")
     assert result.exit_code == 1

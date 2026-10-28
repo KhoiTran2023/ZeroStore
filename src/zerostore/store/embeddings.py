@@ -53,6 +53,10 @@ class HashingEmbedder:
         return [v / norm for v in vec] if norm else vec
 
 
+class EmbeddingUnavailable(RuntimeError):
+    """The embedder this install asks for can't start on this computer right now."""
+
+
 class FastEmbedEmbedder:
     """Small local model on CPU. Install with `pip install 'zerostore[local]'`."""
 
@@ -65,9 +69,17 @@ class FastEmbedEmbedder:
             raise RuntimeError(
                 "local embeddings need the optional extra: pip install 'zerostore[local]'"
             ) from exc
-        self._model = TextEmbedding(model_name=model)
+        try:
+            self._model = TextEmbedding(model_name=model)
+            self.dim = len(next(iter(self._model.embed(["dimension probe"]))))
+        except Exception as exc:  # the model download failed (offline, blocked) or won't load
+            reason = str(exc).rstrip(".")
+            raise EmbeddingUnavailable(
+                f"the local embedding model {model} couldn't be loaded ({reason}). It is downloaded "
+                "once from Hugging Face, so this computer needs to reach huggingface.co; or set "
+                "`ai.embeddings: basic` in zerostore.yaml to use word matching instead"
+            ) from exc
         self.name = f"fastembed:{model}"
-        self.dim = len(next(iter(self._model.embed(["dimension probe"]))))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [list(map(float, v)) for v in self._model.embed(texts)]

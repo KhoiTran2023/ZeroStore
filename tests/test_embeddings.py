@@ -10,7 +10,13 @@ import pytest
 
 from zerostore.app import ZeroStore, embedder_from_name, make_embedder, planned_embedder
 from zerostore.config import parse_config
-from zerostore.store.embeddings import EmbeddingError, HashingEmbedder, ProviderEmbedder
+from zerostore.store.embeddings import (
+    EmbeddingError,
+    EmbeddingUnavailable,
+    FastEmbedEmbedder,
+    HashingEmbedder,
+    ProviderEmbedder,
+)
 
 
 def fake_embeddings(dim=3, status=200):
@@ -99,3 +105,43 @@ def test_embedder_from_name():
     with pytest.raises(RuntimeError, match="unknown embedder"):
         embedder_from_name("word2vec", config)
     assert make_embedder(config, quiet=True, built_with="hashing-64").dim == 64
+
+
+class _BlockedTextEmbedding:
+    """fastembed when the model can't be downloaded (offline, or Hugging Face blocked)."""
+
+    def __init__(self, model_name):
+        raise ValueError(f"Could not load model {model_name} from any source.")
+
+
+@pytest.fixture
+def blocked_fastembed(monkeypatch):
+    import sys
+    import types
+
+    module = types.ModuleType("fastembed")
+    module.TextEmbedding = _BlockedTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", module)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+
+
+def test_a_local_model_that_cant_download_says_so_plainly(blocked_fastembed):
+    with pytest.raises(EmbeddingUnavailable, match="huggingface.co") as caught:
+        FastEmbedEmbedder()
+    assert "ai.embeddings: basic" in str(caught.value)
+
+
+def test_a_new_store_starts_with_word_matching_when_the_model_cant_download(
+    tmp_path, blocked_fastembed, caplog
+):
+    with caplog.at_level(logging.WARNING):
+        store = ZeroStore.open(cfg(tmp_path))
+    assert store.facts.embedder.name == "hashing-256"
+    assert "zerostore reindex" in caplog.text
+    store.close()
+
+
+def test_a_store_built_with_the_local_model_refuses_another(tmp_path, blocked_fastembed):
+    # Its vectors came from that model, so word-matching vectors can't search them.
+    with pytest.raises(EmbeddingUnavailable):
+        make_embedder(cfg(tmp_path), quiet=True, built_with=f"fastembed:{FastEmbedEmbedder.DEFAULT_MODEL}")
