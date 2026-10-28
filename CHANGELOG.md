@@ -6,6 +6,20 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### Fixes from a localhost end-to-end test
+
+- Without an AI key or the local model, search no longer pads every answer with unrelated facts: a fact must share a
+  word with the question (common words like "what" or "our" don't count). When none does, agents get "not sure"
+  instead of the five closest facts.
+- Over HTTP, an agent now lists only the tools its token may use, as it already did over stdio. A default or
+  confidential token no longer sees the owner tools (`token_create`, `sync_now` and the rest); calling them was
+  already refused.
+- `zerostore status` lists approved decisions (`decisions.md`) as a source once that file exists, instead of
+  "none yet".
+- When the local embedding model (`zerostore[local]`) can't be downloaded, for example because the computer can't
+  reach huggingface.co, `zerostore reindex` explains that in one line instead of crashing, and leaves the fact store
+  as it was. A new install starts with word matching and says to run `zerostore reindex` once the model loads.
+
 ### Uninstall in one step
 
 - `install.sh --uninstall` stops the background service, removes the `zerostore` command (uv or pipx), and takes
