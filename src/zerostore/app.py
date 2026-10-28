@@ -11,6 +11,7 @@ from zerostore.config import Config
 from zerostore.store.embeddings import (
     EMBEDDING_MODELS,
     Embedder,
+    EmbeddingUnavailable,
     FastEmbedEmbedder,
     HashingEmbedder,
     ProviderEmbedder,
@@ -77,7 +78,14 @@ def make_embedder(config: Config, quiet: bool = False, built_with: str | None = 
             "No embedding model is set up, so search falls back to word matching. "
             "For better results add an AI key, or: pip install 'zerostore[local]'"
         )
-    return embedder_from_name(name, config)
+    try:
+        return embedder_from_name(name, config)
+    except EmbeddingUnavailable as exc:
+        if built_with is not None:
+            raise  # the store's vectors came from this model; another one can't search them
+        # A new, empty store: start with word matching rather than not at all.
+        log.warning("%s. Using word matching for now; run `zerostore reindex` once it loads.", exc)
+        return HashingEmbedder()
 
 
 @dataclass

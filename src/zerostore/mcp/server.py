@@ -143,6 +143,33 @@ def tools_for(level: AccessLevel) -> set[str]:
     return names
 
 
+class _ListToolsForCaller:
+    """Middleware: answer `tools/list` with only the tools the caller's token may use.
+
+    Every call is still checked on its own; this only keeps agents from seeing
+    (and trying) tools that would be refused. An unrecognized token sees the
+    tools every token may use.
+    """
+
+    def __init__(self, zs: ZeroStore, token_source: TokenSource, server: MCPServer):
+        self.zs, self.token_source, self.server = zs, token_source, server
+
+    async def __call__(self, ctx: Any, call_next: Callable[[Any], Any]) -> Any:
+        result = await call_next(ctx)
+        if ctx.method != "tools/list" or result is None:
+            return result
+        try:
+            level = self.zs.tokens.verify(
+                self.token_source(Context(request_context=ctx, mcp_server=self.server))
+            ).level
+        except TokenError:
+            level = AccessLevel.DEFAULT
+        names = tools_for(level)
+        if isinstance(result, dict):
+            return {**result, "tools": [t for t in result.get("tools", []) if t.get("name") in names]}
+        return result.model_copy(update={"tools": [t for t in result.tools if t.name in names]})
+
+
 def build_server(
     zs: ZeroStore,
     token_source: TokenSource,
@@ -154,7 +181,8 @@ def build_server(
 
     `only_level` registers just the tools that level may use (stdio, where one
     process serves one token). Without it every tool is registered and each
-    call is checked (HTTP, where one server serves many tokens).
+    call is checked (HTTP, where one server serves many tokens); `tools/list`
+    then shows each caller only the tools its token's level may use.
     """
     server = MCPServer(
         name=d.SERVER_NAME,
@@ -162,6 +190,8 @@ def build_server(
         version=__version__,
     )
     allowed = tools_for(only_level) if only_level else None
+    if allowed is None:
+        server.middleware.append(_ListToolsForCaller(zs, token_source, server))
 
     from zerostore.librarian.retrieval import Retriever
     from zerostore.librarian.review import ReviewError, before_after, decide, describe

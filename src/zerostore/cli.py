@@ -638,13 +638,14 @@ def status(
     config: Path = ConfigOption,
 ) -> None:
     """Show what ZeroStore holds, what's waiting for you, and whether its four services are up."""
+    from zerostore.librarian.ingestion import source_names
     from zerostore.services import check
 
     zs = _open(config)
     cfg: Config = zs.config
     info = {
         "version": __version__,
-        "sources_configured": cfg.sources.enabled(),
+        "sources_configured": source_names(cfg),  # decisions.md counts once it exists
         "documents": len(zs.facts.sources(include_confidential=True)),
         "chunks": zs.facts.count(),
         "active_tokens": len(zs.tokens.list()),

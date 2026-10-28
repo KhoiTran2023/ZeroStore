@@ -7,13 +7,15 @@
 3. Search: hybrid vector + keyword search over the allowed facts.
 4. Rerank: `score` each candidate, following the steering rule.
 5. Good enough? If the best score is below `retrieval.answer_cutoff`, answer
-   "not sure" instead of returning weak facts.
+   "not sure" instead of returning weak facts. With no reranker and only word
+   matching (the hashing embedder), a fact must share a word with the question.
 6. Answer: the top `retrieval.max_facts` facts, each with its source and date.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -27,6 +29,25 @@ log = logging.getLogger("zerostore.retrieval")
 
 NARROW_AT = 0.60  # route confidence needed before the search is narrowed
 POOL = 4  # candidates fetched per fact returned
+
+_WORD = re.compile(r"[a-z0-9$€£%]+")
+# Words too common to show that a fact is about the question.
+STOPWORDS = frozenset(
+    "a about all an and any are as at be been but by can could did do does for from had has have "
+    "how i if in into is it its me my no not of on or our please should so tell than that the "
+    "their them then there these they this to us was we were what when where which who whom why "
+    "will with would you your".split()
+)
+
+
+def content_words(text: str) -> set[str]:
+    """The words that carry meaning, lowercased, with a plural `s` dropped."""
+    words = set()
+    for word in _WORD.findall(text.lower()):
+        if word in STOPWORDS or len(word) < 2:
+            continue
+        words.add(word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word)
+    return words
 
 
 @dataclass
@@ -83,6 +104,11 @@ class Retriever:
         candidates = search(out.topics)
         if out.topics and not candidates:
             out.topics, candidates = None, search(None)
+
+        if engines.rerank is None and self.zs.facts.embedder.name.startswith("hashing-"):
+            # Word matching ranks every fact, related or not; keep only the ones sharing a word.
+            wanted = content_words(question)
+            candidates = [r for r in candidates if wanted & content_words(f"{r['title']} {r['text']}")]
 
         if engines.rerank is None or not candidates:
             out.facts = candidates[: settings.max_facts]
