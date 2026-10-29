@@ -465,14 +465,27 @@ def test_installer_installs_sets_up_starts_and_opens(tmp_path):
     result, calls = run_installer(tmp_path, ZEROSTORE_NO_OPEN="1")
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls[0] == "uv tool install --force --reinstall-package zerostore --python >=3.10 /src/zerostore"
+    # On your own computer, ZeroStore reads a folder of yours (here HOME has no Documents folder).
     assert [c for c in calls if c.startswith("zerostore")] == [
         "zerostore --version",
-        "zerostore init --no-rule",
+        f"zerostore init --no-rule --folder {tmp_path / 'ZeroStore'}",
         "zerostore service install",
         "zerostore ui --no-open",
     ]
     assert "uv tool update-shell" in calls  # the tools folder isn't on PATH yet
     assert f'export PATH="{tmp_path / "tools"}:$PATH"' in result.stdout
+    assert f"put your notes and docs in {tmp_path / 'ZeroStore'}, add your AI key" in result.stdout
+
+
+@needs_sh
+def test_installer_reads_documents_or_the_folder_you_name(tmp_path):
+    (tmp_path / "Documents").mkdir()
+    _, calls = run_installer(tmp_path, ZEROSTORE_NO_SERVICE="1")
+    assert f"zerostore init --no-rule --folder {tmp_path / 'Documents' / 'ZeroStore'}" in calls
+    _, calls = run_installer(tmp_path, "--folder", "~/My Notes", ZEROSTORE_NO_SERVICE="1")
+    assert f"zerostore init --no-rule --folder {tmp_path / 'My Notes'}" in calls
+    _, calls = run_installer(tmp_path, ZEROSTORE_NO_SERVICE="1", ZEROSTORE_FOLDER="/srv/notes")
+    assert "zerostore init --no-rule --folder /srv/notes" in calls
 
 
 @needs_sh
@@ -732,7 +745,9 @@ def test_uninstall_when_nothing_is_installed(tmp_path):
     ("args", "says"),
     [
         (["--delete-data"], "--delete-data goes with --uninstall"),
-        (["--uninstall", "--ip"], "--uninstall takes no --domain or --ip"),
+        (["--uninstall", "--ip"], "--uninstall takes no --domain, --ip or --folder"),
+        (["--uninstall", "--folder", "~/x"], "--uninstall takes no --domain, --ip or --folder"),
+        (["--folder"], "--folder needs a path"),
     ],
 )
 def test_uninstall_options_are_checked(tmp_path, args, says):

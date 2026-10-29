@@ -6,6 +6,22 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### ZeroStore on your own computer reads a folder of yours
+
+- A localhost install (`install.sh` with no `--domain` or `--ip`) is now a working ZeroStore for your personal use:
+  it reads `~/Documents/ZeroStore` (or `~/ZeroStore` when there's no Documents folder), made with a welcome note if
+  it's new, and checks it every five minutes. What's left is adding your AI key on the setup page, which now opens
+  on that step.
+- `--folder <path>` (or `ZEROSTORE_FOLDER`) picks another folder. `zerostore init --folder <path>` does the same on
+  an existing install, adding the folder and leaving everything else as it was.
+- New source, "Folders on this computer" (`sources.folders.paths` in zerostore.yaml): Markdown, text and
+  reStructuredText files in the folders you list and every folder inside them, skipping hidden files and folders.
+  The setup page adds and removes folders; the settings page lists them with the other sources. A file may start
+  with the demo's `---` header for its title, date and labels.
+- Confidential places, tags and roles can name a folder (`- folder: ~/Notes/Private`) and cover everything inside it.
+- A new install runs its first sync as soon as it has a source, instead of waiting for the first scheduled time.
+- Server installs (`--domain`, `--ip`) are unchanged: they start with no sources, as before.
+
 ### Fixes from a localhost end-to-end test
 
 - Without an AI key or the local model, search no longer pads every answer with unrelated facts: a fact must share a

@@ -40,6 +40,9 @@ def matches(doc: SourceDocument, rule: LocationRule) -> bool:
         return doc.location.lower() == rule.github.lower()
     if rule.linear_label and doc.source == "linear":
         return rule.linear_label.lower() in (label.lower() for label in doc.labels)
+    if rule.folder and doc.source == "folders":
+        folder = rule.folder.rstrip("/") or "/"
+        return doc.location == folder or doc.location.startswith(folder.rstrip("/") + "/")
     return False
 
 

@@ -7,6 +7,9 @@
 
 # Where company truth lives. ZeroStore only reads these; it never edits them.
 sources:
+  folders:                                              # folders on this computer, and every folder inside
+    paths: ["~/Documents/ZeroStore"]
+    include: ["*.md", "*.markdown", "*.txt", "*.rst"]
   google_drive:
     folders: ["Company/Decisions", "Company/Pricing"]   # paths, or folder ids written as "id:1AbC..."
     credentials: ~/.zerostore/google-credentials.json   # from Sign in with Google, or a service account key
@@ -65,6 +68,7 @@ retrieval:
 confidential:
   - google_drive: "Company/Finance"
   - linear_label: "hr"
+  - folder: "~/Documents/ZeroStore/Private"
 
 # Optional: tag information by where it lives, and give each agent token a role
 # that lists the tags it may see. Untagged information is for every agent; a

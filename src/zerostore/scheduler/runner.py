@@ -3,6 +3,7 @@
 Several ZeroStore processes can share one state file (each agent may start
 its own stdio server), so a sync only runs when it is due and the shared
 sync lock is free. A run the computer slept through happens once on waking.
+The first sync of a new install runs as soon as it has a source.
 """
 
 from __future__ import annotations
@@ -80,7 +81,10 @@ class SyncScheduler:
 
         zs = self.ingestor.zs
         now = self.clock()
-        if not is_due(zs.state, self.schedule, now, self.tz):
+        # The very first sync runs as soon as there is something to read, not at the next slot,
+        # so a new install answers from its sources within a minute.
+        first = zs.state.get_meta("last_sync") is None and bool(source_names(zs.config))
+        if not first and not is_due(zs.state, self.schedule, now, self.tz):
             return False
         if not source_names(zs.config):
             zs.state.set_meta(ANCHOR_KEY, now.isoformat())  # nothing to read yet; wait for the next slot

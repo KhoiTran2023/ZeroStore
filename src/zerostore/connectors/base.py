@@ -32,7 +32,7 @@ class ItemRef:
 @dataclass
 class SourceDocument:
     doc_id: str
-    source: str  # google_drive, github or linear
+    source: str  # google_drive, github, linear, folders or decisions
     title: str
     text: str
     url: str

@@ -35,6 +35,21 @@
   {% set csrf_field %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endset %}
   <h2 style="margin:0;font-size:16px">your docs</h2>
   <p style="margin:0" class="muted">ZeroStore reads these on every sync. It never edits them.</p>
+  <div class="stack" style="gap:6px">
+    <h3 style="margin:0;font-size:14px">Folders on this computer <span class="muted" style="font-weight:400">· .md, .txt and .rst files, and every folder inside</span></h3>
+    {% if v.folders and v.folders.paths %}
+    <ul class="list">
+      {% for p in v.folders.paths %}
+      <li><span class="m" style="flex:1;min-width:0;overflow-wrap:anywhere">{{ p }}</span>
+        <form method="post" action="/setup/folders">{{ csrf_field }}<input type="hidden" name="action" value="remove"><input type="hidden" name="value" value="{{ p }}"><button class="btn small" type="submit">Remove</button></form></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <form method="post" action="/setup/folders" class="actions" style="align-items:end">{{ csrf_field }}
+      <label style="flex:1 1 260px"><span>Folder <span class="hint">its full path</span></span><input class="f m" type="text" name="value" autocomplete="off" required placeholder="~/Documents/Company"></label>
+      <button class="btn" type="submit">Add folder</button>
+    </form>
+  </div>
   {% if d.account %}
   <div class="split">
     <span>Google Drive · signed in as <b>{{ d.account }}</b></span>
@@ -97,7 +112,7 @@
   {% endif %}
   {% endif %}
   {% if not d.client or not d.client.builtin %}
-  <details class="more"{% if not d.client %} open{% endif %}>
+  <details class="more"{% if not d.client and not (v.folders and v.folders.paths) %} open{% endif %}>
     <summary>{% if d.client %}Change your Google sign-in app{% else %}Signing in with Google needs a Google sign-in app first{% endif %}</summary>
     <div class="stack" style="margin-top:10px">
       <ol class="muted" style="margin:0;padding-left:20px">

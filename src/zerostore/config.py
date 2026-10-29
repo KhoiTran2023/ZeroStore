@@ -58,13 +58,36 @@ class LinearSource(_Section):
     api_key: str | None = None  # e.g. ${LINEAR_API_KEY}
 
 
+class FolderSource(_Section):
+    """Folders on the computer ZeroStore runs on, read with everything inside them."""
+
+    paths: list[str] = Field(default_factory=list)
+    include: list[str] = Field(default_factory=lambda: ["*.md", "*.markdown", "*.txt", "*.rst"])
+
+    @field_validator("paths")
+    @classmethod
+    def _absolute(cls, paths: list[str]) -> list[str]:
+        cleaned = []
+        for raw in paths:
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                raise ValueError(f"folders are written as full paths, like ~/Documents/Company, got {raw!r}")
+            if str(path) not in cleaned:
+                cleaned.append(str(path))
+        return cleaned
+
+
+SOURCE_NAMES = ("google_drive", "github", "linear", "folders")
+
+
 class Sources(_Section):
     google_drive: GoogleDriveSource | None = None
     github: GitHubSource | None = None
     linear: LinearSource | None = None
+    folders: FolderSource | None = None
 
     def enabled(self) -> list[str]:
-        return [name for name in ("google_drive", "github", "linear") if getattr(self, name) is not None]
+        return [name for name in SOURCE_NAMES if getattr(self, name) is not None]
 
 
 class SyncSettings(_Section):
@@ -160,17 +183,21 @@ class RetrievalSettings(_Section):
 
 
 class LocationRule(_Section):
-    """Where information lives: a Drive folder (and everything in it), a GitHub repo, a Linear label."""
+    """Where information lives: a Drive folder (and everything in it), a GitHub repo, a Linear
+    label, or a folder on this computer (and everything in it)."""
 
     google_drive: str | None = None
     linear_label: str | None = None
     github: str | None = None
+    folder: str | None = None
 
     @model_validator(mode="after")
     def _exactly_one(self) -> LocationRule:
-        set_fields = [k for k in ("google_drive", "linear_label", "github") if getattr(self, k)]
+        set_fields = [k for k in ("google_drive", "linear_label", "github", "folder") if getattr(self, k)]
         if len(set_fields) != 1:
-            raise ValueError("each rule names exactly one of google_drive, linear_label, github")
+            raise ValueError("each rule names exactly one of google_drive, linear_label, github, folder")
+        if self.folder:
+            self.folder = str(Path(self.folder).expanduser())
         return self
 
 

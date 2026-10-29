@@ -15,4 +15,8 @@
     <label><span>Teams <span class="hint">comma-separated</span></span><input class="f" type="text" name="linear_teams" value="{{ (v.linear.teams if v.linear else [])|join(', ') }}"></label>
     <label><span>API key <span class="hint">{{ v.linear_key }}</span></span><input class="f" type="password" name="linear_key" autocomplete="off" placeholder="leave blank to keep"></label>
   </div>
+  <label class="check"><input type="checkbox" name="folders_on" value="1"{% if v.folders %} checked{% endif %}> Folders on this computer</label>
+  <div class="grid">
+    <label><span>Folders <span class="hint">full paths, comma-separated · .md, .txt and .rst files</span></span><input class="f m" type="text" name="folder_paths" value="{{ (v.folders.paths if v.folders else [])|join(', ') }}" placeholder="~/Documents/Company"></label>
+  </div>
 </div>

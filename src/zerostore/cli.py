@@ -63,13 +63,9 @@ CONFIG_TEMPLATE = """\
 # ZeroStore settings. Only `sources` is required.
 # Full reference: zerostore.example.yaml in the ZeroStore repository.
 
-sources: {{}}
-  # google_drive: {{ folders: ["Company/Decisions"] }}
-  # github:       {{ repos: ["acme/app"] }}
-  # linear:       {{ teams: ["Product"] }}
-
+{sources}
 sync:
-  schedule: "0 6 * * *"   # daily at 06:00
+  schedule: {schedule}
 
 ai:
   decision_engine: jev      # used when a Jev key is set; otherwise your LLM
@@ -82,6 +78,47 @@ servers:
   vectordb: {home}/facts.lance
   statedb: {home}/state.sqlite
 """
+
+
+NO_SOURCES = """\
+sources: {}
+  # folders:      { paths: ["~/Documents/Company"] }
+  # google_drive: { folders: ["Company/Decisions"] }
+  # github:       { repos: ["acme/app"] }
+  # linear:       { teams: ["Product"] }
+"""
+FOLDER_SOURCES = """\
+sources:
+  folders:                # read every .md, .txt and .rst file in here, and in folders inside
+    paths: [{folder}]
+  # google_drive: {{ folders: ["Company/Decisions"] }}
+  # github:       {{ repos: ["acme/app"] }}
+  # linear:       {{ teams: ["Product"] }}
+"""
+DAILY = '"0 6 * * *"   # daily at 06:00'
+EVERY_FIVE = '"*/5 * * * *"   # every 5 minutes: a local folder is cheap to check'
+
+WELCOME_NOTE = "Welcome to ZeroStore.md"
+WELCOME_TEXT = """\
+---
+title: Welcome to ZeroStore
+---
+# Welcome to ZeroStore
+
+ZeroStore reads every Markdown (.md), text (.txt) and reStructuredText (.rst) file in this
+folder, and in the folders inside it, and lets your AI agents ask about them.
+
+Put your notes, decisions and docs here. ZeroStore checks this folder every five minutes,
+so a new or edited file reaches your agents shortly after you save it. Delete this note
+whenever you like.
+"""
+
+
+def _make_folder(folder: Path) -> None:
+    """Create the folder ZeroStore reads, with a short note in it when it's new and empty."""
+    folder.mkdir(parents=True, exist_ok=True)
+    if not any(folder.iterdir()):
+        (folder / WELCOME_NOTE).write_text(WELCOME_TEXT, encoding="utf-8")
 
 
 def _fail(message: str) -> None:
@@ -141,18 +178,42 @@ def init(
         "--rule/--no-rule",
         help="Add the 'check ZeroStore first' line to agent settings files here, without asking.",
     ),
+    folder: Path = typer.Option(
+        None,
+        help="A folder on this computer to read (created if missing), for ZeroStore on your own machine.",
+    ),
 ) -> None:
     """Set up ZeroStore: settings file, data folders and your owner token."""
     home = (home or home_dir()).expanduser()
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, stat.S_IRWXU)
     config_path = home / CONFIG_FILENAME
+    if folder is not None:
+        folder = folder.expanduser().absolute()
+        try:
+            _make_folder(folder)
+        except OSError as exc:
+            _fail(f"couldn't create the folder {folder}: {exc}")
 
     if config_path.exists():
         typer.echo(f"Using existing settings at {config_path}")
+        if folder is not None:
+            from zerostore.web.settings import SettingsError, update_folders
+
+            try:
+                update_folders(config_path, add=str(folder))
+            except SettingsError as exc:
+                _fail(str(exc))
+            typer.echo(f"ZeroStore reads {folder}")
     else:
-        _write_private(config_path, CONFIG_TEMPLATE.format(home=home))
+        sources = FOLDER_SOURCES.format(folder=json.dumps(str(folder))) if folder else NO_SOURCES
+        _write_private(
+            config_path,
+            CONFIG_TEMPLATE.format(home=home, sources=sources, schedule=EVERY_FIVE if folder else DAILY),
+        )
         typer.echo(f"Created settings at {config_path}")
+        if folder:
+            typer.echo(f"ZeroStore reads {folder}: put your notes and docs there.")
 
     zs = _open(config_path)
     token_path = home / OWNER_TOKEN_FILE

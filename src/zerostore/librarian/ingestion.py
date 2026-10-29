@@ -154,6 +154,11 @@ def make_connector(name: str, config: Config) -> Connector:
         from zerostore.connectors.decisions import DecisionsConnector
 
         return DecisionsConnector(config.decisions_path())
+    if name == "folders":  # real folders on this computer, in the demo too
+        from zerostore.connectors.folder import FolderConnector
+
+        c = config.sources.folders
+        return FolderConnector(c.paths, c.include)
     if config.demo:
         from zerostore.connectors.demo import DemoConnector
 

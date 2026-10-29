@@ -14,7 +14,9 @@ New to servers and terminals? Follow [the step-by-step setup guide](docs/setup-g
 curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh
 ```
 
-On Linux or macOS, this installs the `zerostore` command (with uv, or with pipx if you already have it; uv brings Python 3.10 or newer when the machine has none), creates your settings and owner token in `~/.zerostore`, starts ZeroStore in the background and opens the setup page. Running it again updates ZeroStore and keeps your settings and data. While the repository is private, run it from a clone instead: `ZEROSTORE_PACKAGE=. sh install.sh`. `ZEROSTORE_NO_SERVICE=1` skips the background service and `ZEROSTORE_NO_OPEN=1` prints the setup link instead of opening it.
+On Linux or macOS, this installs the `zerostore` command (with uv, or with pipx if you already have it; uv brings Python 3.10 or newer when the machine has none), creates your settings and owner token in `~/.zerostore`, starts ZeroStore in the background and opens the setup page.
+
+On your own computer that's a working ZeroStore for your personal use: it reads the folder `~/Documents/ZeroStore` (or `~/ZeroStore` when there's no Documents folder), made with a welcome note if it's new, and checks it every five minutes. Put your notes and docs there, add your AI key on the setup page, and connect your agents. Pick another folder with `sh -s -- --folder ~/Notes`, or add more on the setup page. Running it again updates ZeroStore and keeps your settings and data. While the repository is private, run it from a clone instead: `ZEROSTORE_PACKAGE=. sh install.sh`. `ZEROSTORE_NO_SERVICE=1` skips the background service and `ZEROSTORE_NO_OPEN=1` prints the setup link instead of opening it.
 
 To remove ZeroStore, run the installer with `--uninstall` (`sh -s -- --uninstall`, or `sh install.sh --uninstall` from a clone). It stops the background service, removes the `zerostore` command, and takes ZeroStore's site out of Caddy. Your settings and data in `~/.zerostore` stay for a reinstall unless you add `--delete-data`. uv and Caddy stay, because other programs may use them, and agents you connected keep listing ZeroStore until you remove it there (`claude mcp remove zerostore` for Claude Code).
 
@@ -202,6 +204,7 @@ No token can edit a fact. Facts change only when your sources change. Tokens are
 
 ## What gets read
 
+- **Folders on this computer:** Markdown, text and reStructuredText files (`*.md`, `*.markdown`, `*.txt`, `*.rst`) in the folders you list and every folder inside them, skipping hidden files and folders. A file may start with a `---` header giving its `title`, `updated` date and `labels`; otherwise its name is the title and its modified time the date.
 - **Google Drive:** Google Docs, Sheets (first sheet) and Slides as text, plus plain text and Markdown files, in the folders you list and every folder inside them. Sign in with your Google account on the setup page, or use a service account the folders are shared with.
 - **GitHub:** written docs on each repo's default branch (`*.md`, `*.txt`, `*.rst` and similar by default), not code.
 - **Linear:** issues and documents of the teams you list.
