@@ -127,3 +127,16 @@ def test_the_reranker_sees_document_dates(store, engine):
     engine.score = spy
     answer(store, Engines(rerank=engine), "pro plan cost")
     assert any(f.startswith("Document: Pricing 2026 (updated 2026-10-01)") for f in seen)
+
+
+def test_word_matching_without_a_reranker_drops_unrelated_facts(store):
+    # The hashing embedder ranks every fact; only ones sharing a word with the question are served.
+    out = answer(store, Engines(), "When does the mobile app ship?")
+    assert [f["title"] for f in out.facts] == ["Roadmap"]
+    out = answer(store, Engines(), "How is the Series B going?")
+    assert out.not_sure and not out.facts
+
+
+def test_plurals_and_question_words_dont_decide_a_match(store):
+    out = answer(store, Engines(), "what are the mobile apps")
+    assert [f["title"] for f in out.facts] == ["Roadmap"]

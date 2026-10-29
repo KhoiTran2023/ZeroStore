@@ -147,3 +147,17 @@ def test_behind_a_proxy_without_a_public_url_any_name_is_answered(seeded):
     with running(app) as url:
         assert initialize(url, raw, "zs.example.com") == 200
         assert initialize(url, "zs_nope", "zs.example.com") == 401  # the token still decides
+
+
+def test_each_token_lists_only_the_tools_its_level_may_use(seeded, http_url):
+    default_raw, _ = seeded.tokens.create("d", "default")
+    owner_raw, _ = seeded.tokens.create("o", "owner")
+
+    async def names(token):
+        async with client_for(http_url, token) as client:
+            return {t.name for t in (await client.list_tools()).tools}
+
+    default_tools = anyio.run(names, default_raw)
+    assert "search" in default_tools and "propose_fact" in default_tools
+    assert not default_tools & {"token_create", "token_list", "sync_now", "status", "review_decide"}
+    assert {"token_create", "sync_now", "status"} <= anyio.run(names, owner_raw)
