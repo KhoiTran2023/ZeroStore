@@ -9,6 +9,12 @@
 # background (`zerostore service install`), and opens the setup page.
 # Running it again updates ZeroStore and keeps your settings and data.
 #
+# On your own computer, ZeroStore reads a folder of your notes and docs: ~/Documents/ZeroStore
+# (or ~/ZeroStore when there's no Documents folder), created with a welcome note if it's new.
+# Name another one with --folder; after the install, add your AI key on the setup page:
+#
+#   curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --folder ~/Notes
+#
 # On a server, give it the domain name agents will use:
 #
 #   curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh -s -- --domain zs.example.com
@@ -35,6 +41,7 @@
 #   ZEROSTORE_HOME        where settings and data live (default: ~/.zerostore)
 #   ZEROSTORE_NO_SERVICE  1 to skip the background service
 #   ZEROSTORE_NO_OPEN     1 to print the setup link instead of opening the browser
+#   ZEROSTORE_FOLDER      the same as --folder
 #   ZEROSTORE_DOMAIN      the same as --domain
 #   ZEROSTORE_IP          the same as --ip=<address>
 #   ZEROSTORE_PORT        the local port ZeroStore listens on behind Caddy (default: 8765)
@@ -43,6 +50,7 @@ set -eu
 
 PACKAGE="${ZEROSTORE_PACKAGE:-git+https://github.com/KhoiTran2023/ZeroStore}"
 DOMAIN="${ZEROSTORE_DOMAIN:-}"
+FOLDER="${ZEROSTORE_FOLDER:-}"
 IP="${ZEROSTORE_IP:-}"
 SITE=""
 UNINSTALL=0
@@ -288,11 +296,13 @@ parse_args() {
         case "$1" in
             --domain) [ $# -ge 2 ] || die "--domain needs a name, like --domain zs.example.com"; DOMAIN="$2"; shift 2 ;;
             --domain=*) DOMAIN="${1#--domain=}"; shift ;;
+            --folder) [ $# -ge 2 ] || die "--folder needs a path, like --folder ~/Notes"; FOLDER="$2"; shift 2 ;;
+            --folder=*) FOLDER="${1#--folder=}"; shift ;;
             --ip) IP=detect; shift ;;
             --ip=*) IP="${1#--ip=}"; shift ;;
             --uninstall) UNINSTALL=1; shift ;;
             --delete-data) DELETE_DATA=1; shift ;;
-            *) die "unknown option $1 (the options are --domain <name>, --ip, --uninstall and --delete-data)" ;;
+            *) die "unknown option $1 (the options are --folder <path>, --domain <name>, --ip, --uninstall and --delete-data)" ;;
         esac
     done
     case "$DOMAIN" in
@@ -302,8 +312,8 @@ parse_args() {
     if [ -n "$DOMAIN" ] && [ -n "$IP" ]; then
         die "use --domain or --ip, not both"
     fi
-    if [ "$UNINSTALL" = 1 ] && { [ -n "$DOMAIN" ] || [ -n "$IP" ]; }; then
-        die "--uninstall takes no --domain or --ip"
+    if [ "$UNINSTALL" = 1 ] && { [ -n "$DOMAIN" ] || [ -n "$IP" ] || [ -n "$FOLDER" ]; }; then
+        die "--uninstall takes no --domain, --ip or --folder"
     fi
     if [ "$DELETE_DATA" = 1 ] && [ "$UNINSTALL" = 0 ]; then
         die "--delete-data goes with --uninstall"
@@ -363,7 +373,19 @@ main() {
     esac
 
     step "Creating your settings and owner token"
-    "$ZS" init --no-rule
+    if [ -n "$FOLDER" ] || { [ -z "$DOMAIN" ] && [ -z "$IP" ]; }; then
+        # On your own computer ZeroStore starts out reading a folder of yours.
+        if [ -z "$FOLDER" ]; then
+            if [ -d "$HOME/Documents" ]; then FOLDER="$HOME/Documents/ZeroStore"; else FOLDER="$HOME/ZeroStore"; fi
+        fi
+        case "$FOLDER" in
+            \~) FOLDER="$HOME" ;;
+            \~/*) FOLDER="$HOME/${FOLDER#\~/}" ;;
+        esac
+        "$ZS" init --no-rule --folder "$FOLDER"
+    else
+        "$ZS" init --no-rule
+    fi
 
     if [ -n "$DOMAIN" ] || [ -n "$IP" ]; then
         setup_https
@@ -400,7 +422,11 @@ main() {
         say "Open a new terminal to use the zerostore command, or run this one now:"
         say "  export PATH=\"$BIN:\$PATH\""
     fi
-    say "Next: on the setup page, connect your docs, add your AI key and connect your agents."
+    if [ -n "$FOLDER" ]; then
+        say "Next: put your notes and docs in $FOLDER, add your AI key on the setup page, and connect your agents."
+    else
+        say "Next: on the setup page, connect your docs, add your AI key and connect your agents."
+    fi
     if [ -n "$SITE" ]; then
         say "Agents add ZeroStore with https://$SITE/mcp (docs/connect-agents.md)."
     fi

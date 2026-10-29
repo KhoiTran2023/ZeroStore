@@ -41,6 +41,7 @@ from zerostore.web.settings import (
     save_secrets,
     save_text,
     update_drive,
+    update_folders,
     version_of,
 )
 
@@ -71,6 +72,7 @@ SOURCE_NAMES = {
     "google_drive": "Google Drive",
     "github": "GitHub",
     "linear": "Linear",
+    "folders": "Folders",
     "decisions": "decisions.md",
 }
 
@@ -608,7 +610,7 @@ def create_web_app(
         cfg = values["config"]
         s = cfg.sources
         done = {
-            1: bool((s.google_drive and s.google_drive.folders) or s.github or s.linear),
+            1: bool((s.google_drive and s.google_drive.folders) or s.github or s.linear or s.folders),
             2: cfg.ai.has_llm or cfg.ai.has_jev or cfg.ai.decision_engine == "demo",
             3: any(t["level"] != "owner" for t in status["tokens"]),
         }
@@ -868,6 +870,20 @@ def create_web_app(
             except SettingsError as exc:
                 say(session, "warn", f"Not saved: {exc}")
         return RedirectResponse(back, status_code=303)
+
+    @app.post("/setup/folders")
+    async def local_folders(request: Request):
+        session, form = await posted(request)
+        value = (form.get("value") or "").strip()
+        if value:
+            remove = form.get("action") == "remove"
+            try:
+                zs.config = await anyio.to_thread.run_sync(
+                    functools.partial(update_folders, config_path, **{"remove" if remove else "add": value})
+                )
+            except SettingsError as exc:
+                say(session, "warn", f"Not saved: {exc}")
+        return RedirectResponse("/setup?step=1", status_code=303)
 
     @app.post("/setup/sync")
     async def first_sync(request: Request):

@@ -41,7 +41,12 @@ def _settings(zs: ZeroStore, config_path: Path | None) -> list[Check]:
     out = [Check(group, OK, "zerostore.yaml is valid")]
     if not source_names(cfg):
         out.append(
-            Check(group, WARN, "no sources yet", "add Google Drive, GitHub or Linear on the setup page")
+            Check(
+                group,
+                WARN,
+                "no sources yet",
+                "add a folder, Google Drive, GitHub or Linear on the setup page",
+            )
         )
     if cfg.demo:
         out.append(Check(group, OK, "the demo's sources are simulated from local files; no keys needed"))

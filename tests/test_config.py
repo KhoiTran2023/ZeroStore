@@ -30,7 +30,7 @@ def test_full_example_parses(monkeypatch):
     monkeypatch.delenv("LINEAR_API_KEY", raising=False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     cfg = load_config(Path(__file__).parent.parent / "zerostore.example.yaml")
-    assert cfg.sources.enabled() == ["google_drive", "github", "linear"]
+    assert cfg.sources.enabled() == ["google_drive", "github", "linear", "folders"]
     assert cfg.sources.github.repos == ["acme/app"]
     assert cfg.ai.llm_api_key == "sk-test"
     assert cfg.ai.jev_api_key is None  # unset optional key counts as missing

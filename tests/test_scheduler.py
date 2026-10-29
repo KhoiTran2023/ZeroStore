@@ -32,11 +32,24 @@ def test_next_run_daily_at_six():
     assert next_run("0 6 * * *", after, UTC) == datetime(2026, 10, 14, 6, 0, tzinfo=UTC)
 
 
-def test_first_tick_only_starts_the_clock(zs):
+def test_a_new_install_syncs_on_the_first_tick(zs):
     clock = Clock(datetime(2026, 10, 13, 7, 0, tzinfo=UTC))
     scheduler, _ = make(zs, clock)
-    assert scheduler.run_if_due() is False
+    assert scheduler.run_if_due() is True  # never synced: don't wait for 06:00 tomorrow
+    assert zs.state.documents()
     assert zs.state.get_meta(ANCHOR_KEY).startswith("2026-10-13T07:00")
+    clock.now += timedelta(minutes=1)
+    assert scheduler.run_if_due() is False  # then the schedule takes over
+
+
+def test_after_the_first_sync_the_first_tick_only_starts_the_clock(zs):
+    clock = Clock(datetime(2026, 10, 13, 7, 0, tzinfo=UTC))
+    scheduler, _ = make(zs, clock)
+    scheduler.run_if_due()
+    zs.state.delete_meta(ANCHOR_KEY)  # an install that has synced before, scheduled afresh
+    clock.now += timedelta(hours=1)
+    assert scheduler.run_if_due() is False
+    assert zs.state.get_meta(ANCHOR_KEY).startswith("2026-10-13T08:00")
 
 
 def test_runs_once_when_due(zs):

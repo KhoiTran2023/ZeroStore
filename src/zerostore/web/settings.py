@@ -245,6 +245,10 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
             _secret(form, "linear_key", linear, "api_key", found)
         else:
             sources.pop("linear", None)
+        if form.get("folders_on"):
+            _map(sources, "folders")["paths"] = _flow(_split(form.get("folder_paths", "")))
+        else:
+            sources.pop("folders", None)
 
     if "ai" in sections:
         ai = _map(doc, "ai")
@@ -294,7 +298,12 @@ def apply_form(path: Path, form: Mapping[str, str]) -> Config:
     return config
 
 
-PLACE_KINDS = {"google_drive": "Drive folder", "github": "GitHub repo", "linear_label": "Linear label"}
+PLACE_KINDS = {
+    "google_drive": "Drive folder",
+    "github": "GitHub repo",
+    "linear_label": "Linear label",
+    "folder": "Folder on this computer",
+}
 CONFIDENTIAL = "confidential"
 
 
@@ -323,7 +332,7 @@ def _apply_access(doc: CommentedMap, form: Mapping[str, str]) -> None:
         if not tag or not place:
             raise SettingsError("each place needs both a tag and a folder, repo or label")
         if kind not in PLACE_KINDS:
-            raise SettingsError(f"pick a Drive folder, GitHub repo or Linear label for {place}")
+            raise SettingsError(f"pick a Drive folder, GitHub repo, Linear label or folder for {place}")
         rule = CommentedMap({kind: _plain(place)})
         (confidential if tag == CONFIDENTIAL else tags.setdefault(tag, [])).append(rule)
     roles = CommentedMap()
@@ -370,6 +379,36 @@ def update_drive(
     return config
 
 
+def update_folders(path: Path, *, add: str | None = None, remove: str | None = None) -> Config:
+    """Add or remove a folder on this computer. Adding checks that the folder is there."""
+    y = _yaml()
+    doc = y.load(read_text(path)) or CommentedMap()
+    if not isinstance(doc, CommentedMap):
+        raise SettingsError(f"{path.name} must be a mapping of settings")
+    sources = _map(doc, "sources")
+    folders = _map(sources, "folders")
+    paths = [str(p) for p in folders.get("paths") or []]
+    if add:
+        where = Path(add.strip()).expanduser()
+        if not where.is_absolute():
+            raise SettingsError(f"write the folder's full path, like ~/Documents/Company, not {add!r}")
+        if not where.is_dir():
+            raise SettingsError(f"there's no folder at {where}")
+        if str(where) not in paths:
+            paths.append(str(where))
+    if remove:
+        paths = [p for p in paths if p != remove]
+    if paths:
+        folders["paths"] = _flow(paths)
+    else:
+        sources.pop("folders", None)
+    out = io.StringIO()
+    y.dump(doc, out)
+    config = validate(path, out.getvalue())
+    _write(path, out.getvalue())
+    return config
+
+
 def key_state(raw: Any, value: str | None) -> str:
     """How a key is set, for the form: never the key itself."""
     if not value:
@@ -394,6 +433,7 @@ def form_values(path: Path) -> dict[str, Any]:
         "drive": s.google_drive,
         "github": s.github,
         "linear": s.linear,
+        "folders": s.folders,
         "github_token": key_state(raw_github.get("token"), s.github and s.github.token),
         "linear_key": key_state(raw_linear.get("api_key"), s.linear and s.linear.api_key),
         "llm_key": key_state(raw_ai.get("llm_api_key"), config.ai.llm_api_key),

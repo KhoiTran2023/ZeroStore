@@ -17,7 +17,7 @@ It takes about an hour, most of it waiting for things to start.
 > curl -fsSL https://raw.githubusercontent.com/KhoiTran2023/ZeroStore/main/install.sh | sh
 > ```
 >
-> If a Mac asks to install the "command line developer tools", click **Install**, wait for it to finish, and paste the line again. When the installer is done, the setup page opens in your browser by itself: continue from [Part 8](#part-8-connect-your-documents). While the repository is private, use the three commands in the box in [Part 6](#part-6-install-zerostore), leaving out ` --domain zs.example.com`. Claude, ChatGPT and Grok on the web and phone need the server.
+> If a Mac asks to install the "command line developer tools", click **Install**, wait for it to finish, and paste the line again. ZeroStore makes a folder called **ZeroStore** in your Documents folder and reads every Markdown (`.md`) and text (`.txt`) file you put in it, checking for changes every five minutes. To use a folder you already have, add ` -s -- --folder ~/Notes` after `sh` (with your folder's path), or add it later on the setup page under **Folders on this computer**. When the installer is done, the setup page opens in your browser by itself, already past the documents step: add your AI key ([Part 9](#part-9-add-your-ai-key)), then connect your agents. While the repository is private, use the three commands in the box in [Part 6](#part-6-install-zerostore), leaving out ` --domain zs.example.com`. Claude, ChatGPT and Grok on the web and phone need the server.
 
 ## Contents
 
