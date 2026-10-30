@@ -1,6 +1,14 @@
 # ZeroStore
 
-**Tell your sources once. Every agent knows.**
+**Persistent Memory for Any AI Agent**
+
+In recent months, companies have launched plethoras of AI harnesses. OpenClaw, GrokBot, OpenDots, Hermes Agent, to name a few, went viral in their new high-level of agency. In any organization or person using multiple powerful agent harnesses for different purposes, though, sharing context becomes an issue. **Wanting to work off of the same context is dreadingly impossible unless you copy and paste every part of your conversation across every session and AI agent you are working on. As your working knowledge gets updated, you'll have to copy and paste it every time. The context is lost between every AI agent in your organization our project, and nobody has time to update each other.** 
+
+xAI launched GrokTeam, that stores shared, persistent data using MD files across GrokBots. There are two issues with this: a) you have to use GrokBot b) Agents have to read the context document every time, which can eventually get less scalable in context window and time.
+
+TODO:
+Some companies have attempted a specialized workflow to reference a single source of truth for AI Agents across all sessions. 
+Integration with Jev
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
