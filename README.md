@@ -2,13 +2,21 @@
 
 **Persistent Memory for Any AI Agent**
 
-In recent months, companies have launched plethoras of AI harnesses. OpenClaw, GrokBot, OpenDots, Hermes Agent, to name a few, went viral in their new high-level of agency. In any organization or person using multiple powerful agent harnesses for different purposes, though, sharing context becomes an issue. **Wanting to work off of the same context is dreadingly impossible unless you copy and paste every part of your conversation across every session and AI agent you are working on. As your working knowledge gets updated, you'll have to copy and paste it every time. The context is lost between every AI agent in your organization our project, and nobody has time to update each other.** 
+In recent months, companies have launched plethoras of AI harnesses. OpenClaw, GrokBot, OpenDots, Hermes Agent, to name a few, went viral in their new high-level of agency. In any organization or person using multiple of said powerful agent harnesses for different purposes, though, sharing context becomes an issue. **Wanting to work off of the same context is dreadingly impossible unless you copy and paste every part of your conversation across every session and AI agent you are working on. As your working knowledge gets updated, you'll have to copy and paste it every time. The context is lost between every AI agent in your organization our project, and nobody has time to update each other every time new organizational information comes along.** AI Harnesses should do that for you. 
+
+If part of the function of AI is to accessibly translate information from one user to the next, the big blocker for organizations is a) security & privacy of this information on the LLMs and b) friction between sharing information, whether or not through AI, across the many different users, technical or non-technical, in the users' language, in an organization.
+
+The way to solve this is through a rendition of RAG Architecture: VectorDB accessed by MCP Server, ingesting source information (Google Drive, Local Computer, Linear, GitHub) on a regular cron job using LLM reasoning to classify. And for security, MCP Server can only make calls with hashes of approved API-keys and role-based tags.
+
+**ZeroStore is this scalable architecture, open-sourced, and simple to set up in minutes.**
+
+VectorDB acts as the single source of memory truth. A ZeroStore Librarian agent indexes the most relevant information from it.
+The MCP Server provides access to any agent on your team, with tools to fetch information from VectorDB.
+The ZeroStore Librarian Agent ingests information from your sources regularly, and sorts them into the VectorDB. 
+
+Interestingly, combining the VectorDB with Jev turns out to be a powerful combination that turns some searches from minutes into milliseconds. I recommend configuring the Librarian Agent with TypeSafe's Jev, if you have access. Saves tokens and time.
 
 xAI launched GrokTeam, that stores shared, persistent data using MD files across GrokBots. There are two issues with this: a) you have to use GrokBot b) Agents have to read the context document every time, which can eventually get less scalable in context window and time.
-
-TODO:
-Some companies have attempted a specialized workflow to reference a single source of truth for AI Agents across all sessions. 
-Integration with Jev
 
 ZeroStore is a free, self-hosted, open-source knowledge layer that keeps every AI agent on the latest truth about your company. It reads the places truth already lives (Google Drive, GitHub, Linear), notices what changed, and serves small, current, cited answers to any agent over MCP.
 
