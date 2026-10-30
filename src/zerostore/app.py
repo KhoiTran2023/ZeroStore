@@ -53,6 +53,21 @@ def embedder_from_name(name: str, config: Config) -> Embedder:
     raise RuntimeError(f"unknown embedder {name!r}")
 
 
+def no_model_note(config: Config) -> str:
+    """What to say when the store matches words because no embedding model is available."""
+    ai = config.ai
+    if ai.has_llm or ai.has_jev:
+        who = ai.llm_provider if ai.has_llm else "Jev"
+        return (
+            f"Search finds facts by matching words and your AI ranks them ({who} has no embeddings). "
+            "To search by meaning too: pip install 'zerostore[local]', then run `zerostore reindex`."
+        )
+    return (
+        "No embedding model is set up, so search falls back to word matching. "
+        "For better results add an AI key, or: pip install 'zerostore[local]'"
+    )
+
+
 def make_embedder(config: Config, quiet: bool = False, built_with: str | None = None) -> Embedder:
     """Start the embedder for this install.
 
@@ -73,11 +88,8 @@ def make_embedder(config: Config, quiet: bool = False, built_with: str | None = 
                 built_with,
                 wanted,
             )
-    if name == "hashing-256" and config.ai.embeddings != "basic" and not quiet:
-        log.warning(
-            "No embedding model is set up, so search falls back to word matching. "
-            "For better results add an AI key, or: pip install 'zerostore[local]'"
-        )
+    if name == "hashing-256" == wanted and config.ai.embeddings != "basic" and not quiet:
+        log.warning(no_model_note(config))
     try:
         return embedder_from_name(name, config)
     except EmbeddingUnavailable as exc:

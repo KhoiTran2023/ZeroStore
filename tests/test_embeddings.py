@@ -145,3 +145,19 @@ def test_a_store_built_with_the_local_model_refuses_another(tmp_path, blocked_fa
     # Its vectors came from that model, so word-matching vectors can't search them.
     with pytest.raises(EmbeddingUnavailable):
         make_embedder(cfg(tmp_path), quiet=True, built_with=f"fastembed:{FastEmbedEmbedder.DEFAULT_MODEL}")
+
+
+def test_the_word_matching_note_doesnt_ask_for_a_key_you_added(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    with caplog.at_level(logging.WARNING):
+        make_embedder(cfg(tmp_path))
+    assert "add an AI key" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        make_embedder(cfg(tmp_path, {"llm_provider": "anthropic", "llm_api_key": "k"}))
+    assert "anthropic has no embeddings" in caplog.text and "add an AI key" not in caplog.text
+    caplog.clear()
+    # A store kept on word matching after an OpenAI key was added gets only the reindex note.
+    with caplog.at_level(logging.WARNING):
+        make_embedder(cfg(tmp_path, {"llm_provider": "openai", "llm_api_key": "k"}), built_with="hashing-256")
+    assert "zerostore reindex" in caplog.text and "has no embeddings" not in caplog.text
