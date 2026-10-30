@@ -6,6 +6,12 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### A clearer note when search matches words
+
+- With an Anthropic (or Gemini, or Jev) key and no local model, `zerostore serve` and `zerostore sync` no longer say
+  "add an AI key". They now say search finds facts by matching words and your AI ranks them, because that provider
+  has no embeddings, and how to add search by meaning (`zerostore[local]`, then `zerostore reindex`).
+
 ### ZeroStore on your own computer reads a folder of yours
 
 - A localhost install (`install.sh` with no `--domain` or `--ip`) is now a working ZeroStore for your personal use:
