@@ -582,7 +582,8 @@ From then on, apps with the `sales` role can add, change and remove sales inform
 
 Rules worth knowing:
 
-- ZeroStore never changes your Google Docs, GitHub files or Linear issues. When an app fixes a fact that came from one of them, ZeroStore saves the fix and hides the old fact. If someone later edits that document, the document wins again.
+- Nothing waits for you. When an app adds or fixes something, ZeroStore's AI works out which older information it replaces and stops telling apps the old version.
+- ZeroStore never changes your Google Docs, GitHub files or Linear issues. When an app fixes or removes a fact that came from one of them, ZeroStore saves that and hides the old fact. If someone later edits that document, the document wins again.
 - A role can only change tags it can see.
 - Want to check every change before agents are told? Change `review: false` to `review: true`. Changes then wait on the **review** page until you approve them.
 - To stop it, change `enabled: true` to `enabled: false`. What was already changed stays.

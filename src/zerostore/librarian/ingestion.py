@@ -384,19 +384,30 @@ class Ingestor:
                     state.touch_document(doc_id, doc.version)
                 result.unchanged += 1
                 continue
-            # Approved proposals and allowed agent changes were already decided by a person or a role.
-            judged = connector.name not in ("decisions", "written") and self.judge is not None
+            # Approved proposals were decided by a person. Allowed agent changes are judged only to
+            # find the older facts they replace (newer wins), and never wait for a person.
+            trusted = connector.name == "written"
+            judged = connector.name != "decisions" and self.judge is not None
             started = time.perf_counter()
             try:
-                plan = librarian.plan(doc, confidential, record, judged=judged, access=access)
-            except JUDGE_ERRORS as exc:
+                plan = librarian.plan(
+                    doc, confidential, record, judged=judged, access=access, trusted=trusted
+                )
+            except EngineError as exc:
+                if not trusted:
+                    result.failed.append(f"{ref.title}: couldn't be judged, kept as it was ({exc})")
+                    continue
+                # An agent's allowed change still goes live; it just hides nothing this time.
+                log.warning("agent change %s went live unjudged: %s", doc.doc_id, exc)
+                plan = librarian.plan(doc, confidential, record, judged=False, access=access)
+            except EmbeddingError as exc:
                 result.failed.append(f"{ref.title}: couldn't be judged, kept as it was ({exc})")
                 continue
             finally:
                 if judged:
                     report.judged += 1
                     report.judge_seconds += time.perf_counter() - started
-            if plan.confidence is not None and plan.confidence < librarian.threshold:
+            if not trusted and plan.confidence is not None and plan.confidence < librarian.threshold:
                 librarian.queue(plan, rules=rules_fingerprint(config))
                 if record:  # don't fetch this version again while it waits
                     state.touch_document(doc_id, doc.version)

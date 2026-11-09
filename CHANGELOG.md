@@ -14,8 +14,10 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
   change tags it can see, which the settings check.
 - Changes are saved as files in `~/.zerostore/written/` and read back as a source, so timed syncs keep them. A change
   to a fact from Google Drive, GitHub, Linear or a folder is a correction that hides the old fact until the original
-  document is edited. Facts from documents can be corrected, not removed.
-- `agent_writes.review: true` sends every agent change to the review queue (web UI, `zerostore review`) first.
+  document is edited. Removing a fact from a document hides it the same way; the document is never edited.
+- No human step by default: the librarian judges each agent change and retires the older facts it replaces (same
+  tags, confident `compare`); when unsure it keeps both instead of asking. An agent that gives no tag gets its
+  role's only tag. `agent_writes.review: true` sends every agent change to the review queue first instead.
 - Nothing changes for you unless you turn it on.
 
 ### A clearer note when search matches words

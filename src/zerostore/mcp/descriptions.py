@@ -64,9 +64,8 @@ CHANGE_FACT = (
     "Every agent is told the new text from then on. Only works for information your access lets you change."
 )
 REMOVE_FACT = (
-    "Remove a fact that was added through ZeroStore, by its id, when the user says it no longer holds. Facts "
-    "from documents (Google Drive, GitHub, Linear, folders) can't be removed here; correct them with "
-    "change_fact or change the document."
+    "Remove a fact, by its id from search, when the user says it no longer holds. Agents stop being told it. "
+    "A fact from a document stays in the document; ZeroStore stops serving it until that document changes."
 )
 TOKEN_CREATE = (
     "Owner only. Create an access token for an agent or person. Levels: 'default' (non-confidential facts), "

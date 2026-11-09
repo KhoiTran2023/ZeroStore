@@ -223,7 +223,7 @@ Off by default. Turn it on in `zerostore.yaml` and say, per role, which tags its
 ```yaml
 agent_writes:
   enabled: true
-  review: false            # true: every agent change waits for you in the review queue
+  review: false            # leave false for no human step; true: every agent change waits for you
   roles:
     sales: [sales]         # sales agents may change sales information, nothing else
     leadership: [sales, engineering, untagged]   # untagged = information with no tag
@@ -233,10 +233,12 @@ Agents whose role has a list get three more tools: `add_fact`, `change_fact` and
 
 Agents never write into the fact store directly, so a sync can't undo their changes. Each change is saved as a small Markdown file in `~/.zerostore/written/` (set `agent_writes.folder` to move it), which ZeroStore reads back as a source like any other:
 
-- **Adding** a fact makes a new file with the chosen tag.
+- **Adding** a fact makes a new file with the chosen tag (or the role's only tag when the agent gives none).
 - **Changing** a fact added this way rewrites its file.
 - **Changing** a fact from Google Drive, GitHub, Linear or a folder saves a correction with the same tags. The correction hides the old fact (newer wins) on every sync for as long as that fact's text is unchanged. When someone edits the original document, the source is the newer word again.
-- **Removing** works for facts added this way. ZeroStore never edits your sources, so facts from documents can only be corrected.
+- **Removing** a fact added this way deletes its file. Removing a fact from a document saves a small removal file that hides it the same way a correction does; the document itself is never edited.
+
+No person needs to be involved. The librarian judges each agent change like any other new information: when it finds an older fact the change replaces (same tags, `compare` at or above `review.auto_apply_at`), it retires that fact by the newer-wins rule. When it isn't sure, it keeps both rather than asking anyone, and the change still goes live. Without an AI key the change goes live as written.
 
 Changes show up in "what changed" and the activity log. To undo one, delete its file and sync. Turning `enabled` off stops new changes and keeps what was written.
 

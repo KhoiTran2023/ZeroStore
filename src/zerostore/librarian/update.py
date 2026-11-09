@@ -179,8 +179,14 @@ class Librarian:
         record: dict[str, Any] | None,
         judged: bool = True,
         access: str = "",
+        trusted: bool = False,
     ) -> ChangePlan:
-        """Work out what this version of `doc` would change. Raises EngineError if judging fails."""
+        """Work out what this version of `doc` would change. Raises EngineError if judging fails.
+
+        `trusted` is for agent changes a role allowed: every chunk is kept, and only a
+        confident `compare` (at or above the auto-apply level) hides an older fact, so the
+        change goes live without waiting for a person.
+        """
         from zerostore.librarian.ingestion import to_chunks
 
         chunks = to_chunks(doc, confidential, access)
@@ -209,8 +215,9 @@ class Librarian:
         topics = self.zs.config.retrieval.topics
         kept: list[Chunk] = []
         for chunk, (keep, route) in zip(chunks, self.classify([c.text for c in chunks], topics), strict=True):
-            confidences.append(keep.confidence)
-            if keep.yes:
+            if not trusted:
+                confidences.append(keep.confidence)
+            if keep.yes or trusted:
                 chunk.topics = topics_from(route)
                 kept.append(chunk)
         plan.dropped = len(chunks) - len(kept)
@@ -226,6 +233,8 @@ class Librarian:
         if pairs:
             answers = self.judge.compare([(c.text, e["text"]) for c, e in pairs])
             for (chunk, existing), pick in zip(pairs, answers, strict=True):
+                if trusted and pick.confidence < self.threshold:
+                    continue  # not sure it's the same fact: keep both rather than ask anyone
                 confidences.append(pick.confidence)
                 if pick.choice not in ("changed", "conflict"):
                     continue

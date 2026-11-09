@@ -60,7 +60,14 @@ class Entry:
         return PREFIX + self.id
 
     @property
+    def removes(self) -> bool:
+        """A removal: hides the fact it names and says nothing itself."""
+        return bool(self.corrects) and not self.text.strip()
+
+    @property
     def title(self) -> str:
+        if self.removes:
+            return f"Removed from {self.corrects_title or 'a document'} (by {self.written_by})"
         if self.corrects_title:
             return f"Correction to {self.corrects_title} (by {self.written_by})"
         return f"Written by {self.written_by}"
@@ -99,7 +106,10 @@ def write_entry(folder: Path, entry: Entry) -> Path:
     """Save an entry in one step (a reader never sees half a file)."""
     folder.mkdir(parents=True, exist_ok=True)
     target = entry_path(folder, entry.id)
-    body = "---\n" + yaml.safe_dump(entry.header(), sort_keys=False) + "---\n\n" + entry.text.strip() + "\n"
+    text = entry.text.strip()
+    body = (
+        "---\n" + yaml.safe_dump(entry.header(), sort_keys=False) + "---\n" + (f"\n{text}\n" if text else "")
+    )
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -217,7 +227,8 @@ class WrittenConnector(Connector):
 
 
 def reapply_corrections(zs: Any) -> int:
-    """Hide every fact a live correction replaces, when its text is still the corrected one.
+    """Hide every fact a live correction or removal replaces, when its text is still the
+    one that was corrected, and bring back facts whose removal file is gone.
 
     Run at the end of each sync, so a correction keeps holding after the original
     document is re-read with that fact unchanged. Returns how many facts were hidden.
@@ -226,9 +237,16 @@ def reapply_corrections(zs: Any) -> int:
 
     folder = zs.config.agent_writes.folder_path()
     live = zs.state.documents(SOURCE)
+    found = entries(folder)
+    present = {e.doc_id for e in found}
+    for by_doc in zs.facts.superseding_docs(PREFIX):
+        if by_doc not in present and by_doc not in live:
+            zs.facts.restore_superseded(by_doc)  # its removal or correction was deleted
     hidden = 0
-    for entry in entries(folder):
-        if not entry.corrects or not (live.get(entry.doc_id) or {}).get("chunks"):
+    for entry in found:
+        if not entry.corrects:
+            continue
+        if not entry.removes and not (live.get(entry.doc_id) or {}).get("chunks"):
             continue
         row = zs.facts.get(entry.corrects, include_confidential=True)
         if row is None or row["superseded_by"] or row["doc_id"] == entry.doc_id:

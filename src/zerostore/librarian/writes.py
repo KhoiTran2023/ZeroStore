@@ -82,6 +82,11 @@ def plan_add(
     zs: ZeroStore, caller: TokenInfo, text: str, tag: str | None, confidential: bool
 ) -> dict[str, Any]:
     tag = (tag or "").strip().lower() or None
+    if tag is None and not caller.level.is_owner:
+        # No tag given: when the role may change exactly one tag (and not untagged), use it.
+        scope = set(zs.config.agent_writes.roles.get(caller.role or "", []))
+        if len(scope) == 1 and "untagged" not in scope:
+            tag = next(iter(scope))
     if tag == "untagged":
         tag = None
     if tag and tag not in zs.config.tags:
@@ -121,12 +126,20 @@ def plan_remove(zs: ZeroStore, caller: TokenInfo, fact_id: str, hidden: list[str
     row = _target(zs, fact_id, hidden, caller)
     _check(zs, caller, key_tags(row["access"]), bool(row["confidential"]))
     entry_id = w.entry_id_of(row["doc_id"])
-    if not entry_id:
-        raise WriteRefused(
-            f"this fact comes from {row['title']} ({row['source']}), which ZeroStore only reads. "
-            "Use change_fact to correct it, or change the original document."
-        )
-    return {"op": "remove", "entry": entry_id, "before": row["text"]}
+    if entry_id:
+        return {"op": "remove", "entry": entry_id, "before": row["text"]}
+    from zerostore.librarian.update import text_hash
+
+    # A fact from a document: ZeroStore never edits the source, so it hides the fact instead.
+    return {
+        "op": "hide",
+        "text": "",
+        "confidential": bool(row["confidential"]),
+        "corrects": row["id"],
+        "corrects_hash": text_hash(row["text"]),
+        "corrects_title": row["title"],
+        "before": row["text"],
+    }
 
 
 def submit(zs: ZeroStore, caller: TokenInfo, payload: dict[str, Any]) -> Result:
@@ -149,7 +162,7 @@ def carry_out(zs: ZeroStore, payload: dict[str, Any], written_by: str) -> Result
 
     folder = zs.config.agent_writes.folder_path()
     op = payload["op"]
-    if op in ("add", "correct"):
+    if op in ("add", "correct", "hide"):
         entry = w.Entry(
             id=w.new_id(),
             text=payload["text"],
@@ -161,7 +174,7 @@ def carry_out(zs: ZeroStore, payload: dict[str, Any], written_by: str) -> Result
             corrects_title=payload.get("corrects_title"),
         )
         w.write_entry(folder, entry)
-        verb = "corrected" if op == "correct" else "added"
+        verb = {"correct": "corrected", "hide": "removed"}.get(op, "added")
     elif op == "change":
         entry = w.read_entry(folder, payload["entry"])
         if entry is None:
@@ -177,11 +190,13 @@ def carry_out(zs: ZeroStore, payload: dict[str, Any], written_by: str) -> Result
         raise WriteRefused(f"unknown change {op!r}")
 
     try:
-        Ingestor(zs, judge=None).sync(only=["written"])
+        Ingestor(zs).sync(only=["written"])
     except SyncBusy:
         return Result("saved", f"{verb}; agents will see it after the sync that's running now", [])
-    ids = [r["id"] for r in zs.facts.chunks_of(entry.doc_id)] if entry else []
-    if entry and not ids:  # one chunk at least, by position, if the store was slow to show it
+    ids = [r["id"] for r in zs.facts.chunks_of(entry.doc_id)] if entry and not entry.removes else []
+    if (
+        entry and not entry.removes and not ids
+    ):  # one chunk at least, by position, if the store was slow to show it
         ids = [chunk_id(entry.doc_id, 0)]
     return Result("saved", f"{verb}; agents see it now", ids)
 
@@ -194,6 +209,7 @@ def describe(payload: dict[str, Any]) -> dict[str, Any]:
             "change": "change a fact",
             "correct": "correct a fact",
             "remove": "remove a fact",
+            "hide": "remove a fact",
         }.get(payload.get("op", ""), payload.get("op")),
         "fact": payload.get("text"),
         "tag": payload.get("tag"),

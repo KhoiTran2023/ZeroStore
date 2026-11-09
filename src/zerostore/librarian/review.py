@@ -214,7 +214,7 @@ def _decide_write(zs: ZeroStore, item: dict[str, Any], approve: bool, fact: str 
     if not approve:
         return "the change was dropped"
     payload = dict(item["payload"])
-    if fact and fact.strip() and payload.get("op") != "remove":
+    if fact and fact.strip() and payload.get("op") not in ("remove", "hide"):
         payload["text"] = fact.strip()
     try:
         return carry_out(zs, payload, item.get("created_by") or "an agent").message

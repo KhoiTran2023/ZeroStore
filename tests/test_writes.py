@@ -92,7 +92,8 @@ def test_a_role_adds_within_its_tags_and_nowhere_else(demo, team):
     assert all(f["document"] != "Written by hr-bot" for f in seen["facts"])
 
     refused(
-        call(zs, hr, "add_fact", text="The Pro plan is free."), "may only change information tagged people"
+        call(zs, hr, "add_fact", text="The Pro plan is free.", tag="untagged"),
+        "may only change information tagged people",
     )
     refused(call(zs, hr, "add_fact", text="x", tag="people", confidential=True), "confidential")
     refused(call(zs, hr, "add_fact", text="x", tag="nope"), "no tag called")
@@ -137,12 +138,35 @@ def test_a_role_cant_change_what_it_isnt_given(demo, team):
     # Confidential facts aren't even visible to a default token.
     runway = fact_from(zs, owner, "how much runway do we have", RUNWAY)
     refused(call(zs, hr, "change_fact", id=runway["id"], text="x"), "no fact")
-    # Facts from documents can be corrected but not removed.
-    handbook = fact_from(zs, hr, "core hours Lisbon time", HANDBOOK)
-    refused(call(zs, hr, "remove_fact", id=handbook["id"]), "only reads")
     assert not (d.config_path.parent / "written").exists() or not list(
         (d.config_path.parent / "written").iterdir()
     )
+
+
+def test_removing_a_document_fact_hides_it_without_anyone(demo, team):
+    """No person needed: the document stays as it is, agents stop being told the fact."""
+    d, zs = demo
+    _, hr, _, _ = team
+    allow_writes(demo, {"hr": ["people"]})
+    handbook = fact_from(zs, hr, "core hours Lisbon time", HANDBOOK)
+    assert ok(call(zs, hr, "remove_fact", id=handbook["id"]))["status"] == "saved"
+    for _ in range(2):  # timed syncs don't bring it back
+        assert "outdated" in ok(call(zs, hr, "get_fact", id=handbook["id"])).get("status", "")
+        assert Ingestor(zs).sync().ok
+    # Deleting the removal's file brings it back on the next sync.
+    for f in (d.config_path.parent / "written").glob("*.md"):
+        f.unlink()
+    assert Ingestor(zs).sync().ok
+    assert "status" not in ok(call(zs, hr, "get_fact", id=handbook["id"]))
+
+
+def test_a_new_fact_without_a_tag_takes_the_roles_only_tag(demo, team):
+    zs, hr, plain, _ = team
+    allow_writes(demo, {"hr": ["people"]})
+    ok(call(zs, hr, "add_fact", text="Parental leave is twenty weeks, fully paid."))
+    fact_from(zs, hr, "parental leave weeks", "Written by hr-bot")
+    seen = ok(call(zs, plain, "search", query="parental leave weeks"))
+    assert all(f["document"] != "Written by hr-bot" for f in seen["facts"])
 
 
 def test_untagged_needs_untagged_in_the_list(demo, team):
@@ -216,3 +240,18 @@ def test_stdio_registers_the_write_tools_only_for_writers(demo, team):
 
     assert "add_fact" in anyio.run(names, True)
     assert "add_fact" not in anyio.run(names, False)
+
+
+def test_the_librarian_retires_what_an_agent_change_replaces(demo, team):
+    """The judge, not a person, decides which older fact a new one replaces."""
+    zs, _, _, _ = team
+    allow_writes(demo, {"hr": ["people", "untagged"]})
+    bot, _ = zs.tokens.create("pricing-bot", "default", role="hr")
+    old = fact_from(zs, bot, "what does the Pro plan cost", PRICING)
+    out = ok(call(zs, bot, "add_fact", text="The Pro plan costs $29 per user per month.", tag="untagged"))
+    assert out["status"] == "saved"
+    assert "outdated" in ok(call(zs, bot, "get_fact", id=old["id"])).get("status", "")
+    assert not zs.state.review_items("pending") or all(
+        i["kind"] != "change" or not i["doc_id"].startswith("written:")
+        for i in zs.state.review_items("pending")
+    )
