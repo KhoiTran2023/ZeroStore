@@ -87,6 +87,22 @@ roles:
   leadership: [sales, engineering]
 
 agent_proposals: true           # agents may propose facts for you to approve
+
+# Optional: let agents add, change and remove information themselves, but only
+# the information their role is given here. Off unless `enabled: true`.
+# Each role lists the tags it may change (`untagged` = information with no tag);
+# a role can only change tags it can see (under `roles:`). Owner tokens may
+# change everything. Changes are saved as files in `folder`, which ZeroStore
+# reads back as a source, so the next sync keeps them instead of undoing them.
+# A change to a fact from Google Drive, GitHub or Linear is saved as a correction
+# that hides the old fact until someone edits that document itself.
+agent_writes:
+  enabled: false
+  review: false                 # true: every agent change waits for you in the review queue
+  folder: ~/.zerostore/written
+  roles:
+    sales: [sales]
+    leadership: [sales, engineering, untagged]
 decisions_file: ~/.zerostore/decisions.md   # approved proposals land here and are read back as a source
 web_ui: true                    # the web UI at / when running `zerostore serve --http`
 

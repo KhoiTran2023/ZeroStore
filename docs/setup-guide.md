@@ -560,6 +560,33 @@ Rules worth knowing:
 - Untagged information is for every app.
 - If you remove a tag, its documents stay hidden until the next sync, so a typo never makes anything public.
 
+### Let apps change information (optional)
+
+Normally apps only read. You can let an app add or fix information too, but only the information its role is given. For example, a `sales` app may change sales information and nothing else.
+
+1. Make the tags and roles first (the steps above).
+2. Click **settings** in the top bar, then **yaml** at the top of the page.
+3. At the end of the text, add these lines. Use your own role and tag names. `untagged` means information with no tag.
+
+   ```yaml
+   agent_writes:
+     enabled: true
+     review: false
+     roles:
+       sales: [sales]
+   ```
+
+4. Click **Save**.
+
+From then on, apps with the `sales` role can add, change and remove sales information. Anything else they try is refused, and the refusal shows on the **log** page. Apps with no role can't change anything.
+
+Rules worth knowing:
+
+- ZeroStore never changes your Google Docs, GitHub files or Linear issues. When an app fixes a fact that came from one of them, ZeroStore saves the fix and hides the old fact. If someone later edits that document, the document wins again.
+- A role can only change tags it can see.
+- Want to check every change before agents are told? Change `review: false` to `review: true`. Changes then wait on the **review** page until you approve them.
+- To stop it, change `enabled: true` to `enabled: false`. What was already changed stays.
+
 ## Everyday tasks
 
 Open the server's terminal (Part 5) and paste the line you need.

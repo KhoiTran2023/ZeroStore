@@ -6,6 +6,9 @@
   Approve retires it (or records the move); reject keeps its facts.
 - `agent_proposal`: a fact an agent suggested. Approve writes it to
   decisions.md, which is read back as a source; reject drops it.
+- `agent_write`: a change an agent's role allows, queued because
+  `agent_writes.review` is on. Approve carries it out (librarian/writes.py);
+  reject drops it.
 
 The MCP tools, the CLI and the web UI all go through `decide`.
 """
@@ -65,6 +68,10 @@ def describe(item: dict[str, Any]) -> dict[str, Any]:
             suggestion=p.get("suggestion"),
             moved_to=(p.get("moved_to") or {}).get("title"),
         )
+    elif item["kind"] == "agent_write":
+        from zerostore.librarian.writes import describe as describe_write
+
+        view.update(describe_write(p), proposed_by=item.get("created_by"))
     else:
         view.update(
             fact=p.get("fact"),
@@ -111,6 +118,11 @@ def before_after(zs: ZeroStore, item: dict[str, Any]) -> dict[str, list[dict[str
     elif item["kind"] == "delete":
         live = zs.facts.chunks_of(item["doc_id"] or "")
         before = [_shown(p["title"], r["text"]) for r in live if not r.get("superseded_by")]
+    elif item["kind"] == "agent_write":
+        if p.get("before"):
+            before = [_shown(p.get("corrects_title") or "written fact", p["before"])]
+        if p.get("text"):
+            after = [_shown("changed fact", p["text"])]
     else:
         after = [_shown("proposed fact", p.get("fact") or "")]
     return {"before": before[:SHOWN_TEXTS], "after": after[:SHOWN_TEXTS]}
@@ -183,6 +195,8 @@ def _decide(zs: ZeroStore, item: dict[str, Any], approve: bool, decided_by: str,
                 message = f"kept the facts from {record['title']}"
         elif kind == "agent_proposal":
             message = _decide_proposal(zs, payload, approve, decided_by, fact)
+        elif kind == "agent_write":
+            message = _decide_write(zs, item, approve, fact)
         else:
             raise ReviewError(f"review item {item_id} has an unknown kind {kind!r}")
     except Exception:
@@ -192,6 +206,20 @@ def _decide(zs: ZeroStore, item: dict[str, Any], approve: bool, decided_by: str,
     status = "approved" if approve else "rejected"
     zs.state.audit(f"review_{status}", doc_id=item["doc_id"], detail=f"{item_id} ({kind}) by {decided_by}")
     return Outcome(item_id, kind, status, message)
+
+
+def _decide_write(zs: ZeroStore, item: dict[str, Any], approve: bool, fact: str | None) -> str:
+    from zerostore.librarian.writes import WriteRefused, carry_out
+
+    if not approve:
+        return "the change was dropped"
+    payload = dict(item["payload"])
+    if fact and fact.strip() and payload.get("op") != "remove":
+        payload["text"] = fact.strip()
+    try:
+        return carry_out(zs, payload, item.get("created_by") or "an agent").message
+    except WriteRefused as exc:
+        raise ReviewError(str(exc)) from None
 
 
 def _decide_proposal(

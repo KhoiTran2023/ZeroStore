@@ -6,6 +6,18 @@ Setup steps live in the [README](README.md) and [docs/connect-agents.md](docs/co
 
 ## Unreleased
 
+### Agents can change information, within their role
+
+- New, off by default: `agent_writes` in zerostore.yaml. With `enabled: true`, `agent_writes.roles` lists per role the
+  tags its agents may change (`untagged` for information with no tag). Those agents get `add_fact`, `change_fact`
+  and `remove_fact`; every other write is refused and logged. Owner tokens may change everything. A role may only
+  change tags it can see, which the settings check.
+- Changes are saved as files in `~/.zerostore/written/` and read back as a source, so timed syncs keep them. A change
+  to a fact from Google Drive, GitHub, Linear or a folder is a correction that hides the old fact until the original
+  document is edited. Facts from documents can be corrected, not removed.
+- `agent_writes.review: true` sends every agent change to the review queue (web UI, `zerostore review`) first.
+- Nothing changes for you unless you turn it on.
+
 ### A clearer note when search matches words
 
 - With an Anthropic (or Gemini, or Jev) key and no local model, `zerostore serve` and `zerostore sync` no longer say

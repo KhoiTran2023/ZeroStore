@@ -141,12 +141,17 @@ ConnectorFactory = Callable[[str, Config], Connector]
 
 
 def source_names(config: Config) -> list[str]:
-    """Every source a sync reads: the configured ones, plus decisions.md once it exists."""
+    """Every source a sync reads: the configured ones, plus decisions.md once it exists, plus
+    the written folder (agents' changes) once it exists.
+
+    The written folder is read even when agent writes are turned off later, so what was
+    written stays until a person removes it."""
     from zerostore.connectors.decisions import confidential_path
 
     path = config.decisions_path()
     decisions = config.agent_proposals and (path.exists() or confidential_path(path).exists())
-    return config.sources.enabled() + (["decisions"] if decisions else [])
+    written = config.agent_writes.folder_path().is_dir()
+    return config.sources.enabled() + (["decisions"] if decisions else []) + (["written"] if written else [])
 
 
 def make_connector(name: str, config: Config) -> Connector:
@@ -154,6 +159,10 @@ def make_connector(name: str, config: Config) -> Connector:
         from zerostore.connectors.decisions import DecisionsConnector
 
         return DecisionsConnector(config.decisions_path())
+    if name == "written":
+        from zerostore.connectors.written import WrittenConnector
+
+        return WrittenConnector(config.agent_writes.folder_path())
     if name == "folders":  # real folders on this computer, in the demo too
         from zerostore.connectors.folder import FolderConnector
 
@@ -187,6 +196,8 @@ def is_confidential(doc: SourceDocument, rules: list[ConfidentialRule]) -> bool:
 
         # Facts proposed through confidential tokens live in their own file.
         return doc.doc_id == CONFIDENTIAL_DOC_ID
+    if doc.source == "written":
+        return bool(doc.meta.get("confidential"))
     return any(matches(doc, rule) for rule in rules)
 
 
@@ -194,6 +205,9 @@ def access_of(doc: SourceDocument, config: Config) -> str:
     """The document's tags as stored with its facts (see access/roles.py)."""
     if doc.source == "decisions":
         return ""  # approved proposals carry no tags; confidential ones have their own file
+    if doc.source == "written":
+        tag = doc.meta.get("tag")
+        return access_key([tag] if tag else [])  # the tag the agent's role was allowed to change
     return access_key(tags_for(doc, config))
 
 
@@ -295,6 +309,11 @@ class Ingestor:
 
         if not only:
             self._retire_unconfigured(set(configured), report)
+        if "written" in configured:
+            from zerostore.connectors.written import reapply_corrections
+
+            # Re-reading an original document brings back facts a correction hides; hide them again.
+            reapply_corrections(self.zs)
         if not only and report.ok:
             self.zs.state.set_meta("confidential_rules", rules_fp)
         if report.changes:
@@ -365,7 +384,8 @@ class Ingestor:
                     state.touch_document(doc_id, doc.version)
                 result.unchanged += 1
                 continue
-            judged = connector.name != "decisions" and self.judge is not None
+            # Approved proposals and allowed agent changes were already decided by a person or a role.
+            judged = connector.name not in ("decisions", "written") and self.judge is not None
             started = time.perf_counter()
             try:
                 plan = librarian.plan(doc, confidential, record, judged=judged, access=access)
@@ -420,7 +440,7 @@ class Ingestor:
                 )
 
         missing = [record for doc_id, record in known.items() if doc_id not in refs]
-        if missing and not refs:
+        if missing and not refs and connector.name != "written":
             # An empty listing for a source that had documents is far more likely a lost
             # permission or renamed folder than everything being deleted at once.
             result.warning = (
@@ -440,9 +460,10 @@ class Ingestor:
             return
         if record["source_deleted_at"]:
             return  # already decided: keep its facts
-        if record["source"] == "decisions":
-            # A person removed approved facts from decisions.md on purpose.
-            librarian.retire(record, "removed from the decisions file")
+        if record["source"] in ("decisions", "written"):
+            # A person removed approved facts from decisions.md, or an allowed agent removed its entry.
+            reason = "removed from the decisions file" if record["source"] == "decisions" else "removed"
+            librarian.retire(record, reason)
             report.changes.append(_change("retired", record))
             return
         if any(item["kind"] == "delete" for item in state.pending_for_document(record["doc_id"])):
@@ -481,11 +502,10 @@ class Ingestor:
         for record in self.zs.state.documents().values():
             if record["source"] not in configured:
                 if record["chunks"]:
-                    reason = (
-                        "decisions.md is gone or agent proposals are off"
-                        if record["source"] == "decisions"
-                        else f"{record['source']} was removed from the settings"
-                    )
+                    reason = {
+                        "decisions": "decisions.md is gone or agent proposals are off",
+                        "written": "the written folder is gone",
+                    }.get(record["source"], f"{record['source']} was removed from the settings")
                     self.librarian.retire(record, reason)
                     report.changes.append(_change("retired", record))
                 else:
