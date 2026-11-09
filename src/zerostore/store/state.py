@@ -345,6 +345,11 @@ class StateDB:
             )
             return int(cur.lastrowid or 0)
 
+    def access_refused(self, row_id: int) -> None:
+        """A logged request was let in but then refused (a change outside the role's scope)."""
+        with self.tx() as cur:
+            cur.execute("UPDATE access_log SET allowed = 0 WHERE id = ?", (row_id,))
+
     def access_took(self, row_id: int, duration_ms: int) -> None:
         """How long a logged request took to answer (searches, for the status charts)."""
         with self.tx() as cur:

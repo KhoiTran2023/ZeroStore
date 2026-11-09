@@ -53,6 +53,20 @@ PROPOSE_FACT = (
 
 # Setup tools (owner tokens only)
 
+ADD_FACT = (
+    "Add a company fact to ZeroStore, such as a decision the user just made. Your access only lets you "
+    "change some kinds of information: pass `tag` for the area it belongs to (leave it out for general "
+    "information). If the change isn't allowed, ZeroStore says so; tell the user rather than retrying. "
+    "Search first so you don't add something that's already there; use change_fact to update a fact."
+)
+CHANGE_FACT = (
+    "Replace what a fact says, by its id from search, when the user tells you it's wrong or out of date. "
+    "Every agent is told the new text from then on. Only works for information your access lets you change."
+)
+REMOVE_FACT = (
+    "Remove a fact, by its id from search, when the user says it no longer holds. Agents stop being told it. "
+    "A fact from a document stays in the document; ZeroStore stops serving it until that document changes."
+)
 TOKEN_CREATE = (
     "Owner only. Create an access token for an agent or person. Levels: 'default' (non-confidential facts), "
     "'confidential' (all facts), 'owner' (all facts plus setup). An optional `role` from the settings "

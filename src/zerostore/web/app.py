@@ -74,6 +74,7 @@ SOURCE_NAMES = {
     "linear": "Linear",
     "folders": "Folders",
     "decisions": "decisions.md",
+    "written": "agent changes",
 }
 
 
@@ -176,6 +177,14 @@ def review_view(item: dict[str, Any], auto_apply_at: float) -> dict[str, Any]:
         lean = f" ZeroStore leaned towards {item['suggestion']}." if item.get("suggestion") else ""
         why = f"It was deleted from {source}.{lean} Its facts stay live until you decide."
         tag, no, verb = "deleted", "Keep its facts", "approve"
+    elif kind == "agent_write":
+        fact = item.get("fact", "")
+        short = fact if len(fact) <= 90 else fact[:87] + "..."
+        title = f"{item.get('change', 'change a fact').capitalize()}" + (f": “{short}”?" if short else "?")
+        who = item.get("proposed_by") or "An agent"
+        scope = f" (tag {item['tag']})" if item.get("tag") else ""
+        why = f"{who} made this change{scope}. Its role allows it; you asked to review agent changes."
+        tag, yes, no, verb = "agent change", "Approve", "Reject", "approve"
     else:
         fact = item.get("fact", "")
         title = f"Save “{fact if len(fact) <= 90 else fact[:87] + '...'}”?"
@@ -188,7 +197,7 @@ def review_view(item: dict[str, Any], auto_apply_at: float) -> dict[str, Any]:
         p
         for p in (
             item.get("engine"),
-            source if kind != "agent_proposal" else "",
+            source if kind not in ("agent_proposal", "agent_write") else "",
             local_time(item.get("created_at")),
         )
         if p

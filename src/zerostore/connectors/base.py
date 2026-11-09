@@ -32,7 +32,7 @@ class ItemRef:
 @dataclass
 class SourceDocument:
     doc_id: str
-    source: str  # google_drive, github, linear, folders or decisions
+    source: str  # google_drive, github, linear, folders, decisions or written
     title: str
     text: str
     url: str
@@ -40,6 +40,8 @@ class SourceDocument:
     version: str
     location: str = ""  # folder path, repo or team: what confidentiality rules match on
     labels: list[str] = field(default_factory=list)
+    # Source-specific details the sync needs (the written source's tag and confidential flag).
+    meta: dict[str, Any] = field(default_factory=dict)
 
     @property
     def fingerprint(self) -> str:

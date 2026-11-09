@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from zerostore.config import Config, LocationRule
+from zerostore.config import UNTAGGED, Config, LocationRule
 from zerostore.connectors.base import SourceDocument
 
 
@@ -67,4 +67,47 @@ def role_problem(config: Config, role: str | None) -> str | None:
     if role and role not in config.roles:
         names = ", ".join(config.roles) or "none yet"
         return f"there is no role called {role!r} in zerostore.yaml (roles: {names})"
+    return None
+
+
+def write_scope(config: Config, role: str | None, *, owner: bool) -> set[str] | None:
+    """The tags whose information this caller may change (`untagged` for untagged
+    information), None for everything (owners), or an empty set for nothing.
+
+    Nothing at all while agent writes are turned off.
+    """
+    if not config.agent_writes.enabled:
+        return set()
+    if owner:
+        return None
+    return set(config.agent_writes.roles.get(role or "", []))
+
+
+def write_problem(
+    config: Config,
+    role: str | None,
+    tags: Iterable[str],
+    confidential: bool,
+    *,
+    owner: bool,
+    sees_confidential: bool,
+) -> str | None:
+    """Why this caller can't change information with these tags, or None when it can."""
+    if not config.agent_writes.enabled:
+        return "changes are turned off in this ZeroStore (agent_writes.enabled in zerostore.yaml)"
+    if confidential and not sees_confidential:
+        return "this token can't change confidential information"
+    scope = write_scope(config, role, owner=owner)
+    if scope is None:
+        return None
+    if not scope:
+        who = f"role {role!r}" if role else "a token with no role"
+        return (
+            f"{who} can't change anything; the owner lists what each role may change under agent_writes.roles"
+        )
+    needed = set(tags) or {UNTAGGED}
+    outside = sorted(needed - scope)
+    if outside:
+        allowed = ", ".join(sorted(scope))
+        return f"role {role!r} may only change information tagged {allowed}; this is {', '.join(outside)}"
     return None

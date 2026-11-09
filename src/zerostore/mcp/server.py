@@ -2,7 +2,9 @@
 
 Agents, the web UI and the CLI are all MCP clients, so every request passes
 through here, is checked against its token's access level, and is logged.
-Nothing here can change a fact: facts only change when sources change.
+Facts change only when sources change. Agents whose role may change information
+(`agent_writes` in zerostore.yaml) get add_fact, change_fact and remove_fact, which
+save the change as a file in ZeroStore's written source (librarian/writes.py).
 
 How the token arrives depends on the transport:
 - stdio: the agent's MCP config sets ZEROSTORE_TOKEN for the server process.
@@ -124,10 +126,23 @@ def _supports_elicitation(ctx: Context) -> bool:
         return False
 
 
-def tools_for(level: AccessLevel) -> set[str]:
+WRITE_TOOLS = {"add_fact", "change_fact", "remove_fact"}
+
+
+def may_write(config: Any, caller: TokenInfo) -> bool:
+    """Whether this token may change anything at all (each write is still checked on its own)."""
+    from zerostore.access.roles import write_scope
+
+    scope = write_scope(config, caller.role, owner=caller.level.is_owner)
+    return scope is None or bool(scope)
+
+
+def tools_for(level: AccessLevel, writer: bool = False) -> set[str]:
     names = {"search", "get_fact", "fetch", "whats_changed", "list_sources"}
     if level.can_propose:
         names.add("propose_fact")
+    if writer:
+        names |= WRITE_TOOLS
     if level.is_owner:
         names |= {
             "token_create",
@@ -159,12 +174,12 @@ class _ListToolsForCaller:
         if ctx.method != "tools/list" or result is None:
             return result
         try:
-            level = self.zs.tokens.verify(
+            caller = self.zs.tokens.verify(
                 self.token_source(Context(request_context=ctx, mcp_server=self.server))
-            ).level
+            )
+            names = tools_for(caller.level, may_write(self.zs.config, caller))
         except TokenError:
-            level = AccessLevel.DEFAULT
-        names = tools_for(level)
+            names = tools_for(AccessLevel.DEFAULT)
         if isinstance(result, dict):
             return {**result, "tools": [t for t in result.get("tools", []) if t.get("name") in names]}
         return result.model_copy(update={"tools": [t for t in result.tools if t.name in names]})
@@ -175,21 +190,23 @@ def build_server(
     token_source: TokenSource,
     *,
     only_level: AccessLevel | None = None,
+    only_writer: bool = False,
     engines: Engines | None = None,
 ) -> MCPServer:
     """Build the MCP server.
 
     `only_level` registers just the tools that level may use (stdio, where one
-    process serves one token). Without it every tool is registered and each
-    call is checked (HTTP, where one server serves many tokens); `tools/list`
-    then shows each caller only the tools its token's level may use.
+    process serves one token), plus the write tools when `only_writer`. Without
+    it every tool is registered and each call is checked (HTTP, where one
+    server serves many tokens); `tools/list` then shows each caller only the
+    tools its token may use.
     """
     server = MCPServer(
         name=d.SERVER_NAME,
         instructions=d.SERVER_INSTRUCTIONS,
         version=__version__,
     )
-    allowed = tools_for(only_level) if only_level else None
+    allowed = tools_for(only_level, only_writer) if only_level else None
     if allowed is None:
         server.middleware.append(_ListToolsForCaller(zs, token_source, server))
 
@@ -215,8 +232,20 @@ def build_server(
         except TokenError as exc:
             zs.state.log_access(None, action, detail, allowed=False)
             raise ToolError(f"{exc}. Ask the ZeroStore owner for a token.") from None
-        if action not in tools_for(caller.level):
+        if action not in tools_for(caller.level, may_write(zs.config, caller)):
             zs.state.log_access(caller.id, action, detail, allowed=False)
+            if action in WRITE_TOOLS:
+                from zerostore.access.roles import write_problem
+
+                why = write_problem(
+                    zs.config,
+                    caller.role,
+                    [],
+                    False,
+                    owner=caller.level.is_owner,
+                    sees_confidential=caller.level.sees_confidential,
+                )
+                raise ToolError(f"this token can't change information: {why}")
             raise ToolError(f"this token has the {caller.level.value} access level, which can't use {action}")
         return caller, zs.state.log_access(caller.id, action, detail, allowed=True)
 
@@ -369,6 +398,46 @@ def build_server(
     # The resolver is a closure, which string annotations can't name: set the real object.
     propose_fact.__annotations__["answer"] = Annotated[ElicitationResult[BaseModel], Resolve(ask_the_person)]
     register("propose_fact", d.PROPOSE_FACT, read_only=False)(propose_fact)
+
+    # Write tools (roles allowed by agent_writes) --------------------------
+
+    def write(
+        ctx: Context, action: str, detail: str, plan: Callable[[TokenInfo], dict[str, Any]]
+    ) -> dict[str, Any]:
+        from zerostore.librarian.writes import WriteRefused, submit
+
+        caller, row = authorize_logged(ctx, action, detail[:200])
+        try:
+            result = submit(zs, caller, plan(caller))
+        except WriteRefused as exc:
+            zs.state.access_refused(row)
+            raise ToolError(f"not changed: {exc}") from None
+        out: dict[str, Any] = {"status": result.status, "note": result.message}
+        if result.fact_ids:
+            out["fact_ids"] = result.fact_ids
+        if result.review_id is not None:
+            out["review_id"] = result.review_id
+        return out
+
+    @register("add_fact", d.ADD_FACT, read_only=False)
+    def add_fact(
+        text: str, ctx: Context, tag: str | None = None, confidential: bool = False
+    ) -> dict[str, Any]:
+        from zerostore.librarian.writes import plan_add
+
+        return write(ctx, "add_fact", text, lambda c: plan_add(zs, c, text, tag, confidential))
+
+    @register("change_fact", d.CHANGE_FACT, read_only=False)
+    def change_fact(id: str, text: str, ctx: Context) -> dict[str, Any]:
+        from zerostore.librarian.writes import plan_change
+
+        return write(ctx, "change_fact", f"{id}: {text}", lambda c: plan_change(zs, c, id, text, hidden(c)))
+
+    @register("remove_fact", d.REMOVE_FACT, read_only=False)
+    def remove_fact(id: str, ctx: Context) -> dict[str, Any]:
+        from zerostore.librarian.writes import plan_remove
+
+        return write(ctx, "remove_fact", id, lambda c: plan_remove(zs, c, id, hidden(c)))
 
     # Setup tools (owner) --------------------------------------------------
 

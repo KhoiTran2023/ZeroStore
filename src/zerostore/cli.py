@@ -419,7 +419,7 @@ def _can_open_browser() -> bool:
 
 def _serve_stdio(zs) -> None:
     from zerostore.access.tokens import TokenError
-    from zerostore.mcp.server import build_server, env_token_source
+    from zerostore.mcp.server import build_server, env_token_source, may_write
 
     try:
         caller = zs.tokens.verify(os.environ.get("ZEROSTORE_TOKEN"))
@@ -428,7 +428,9 @@ def _serve_stdio(zs) -> None:
             f"{exc}. Set ZEROSTORE_TOKEN in the agent's MCP settings "
             "(create one with `zerostore token create`)."
         )
-    build_server(zs, env_token_source, only_level=caller.level).run("stdio")
+    build_server(zs, env_token_source, only_level=caller.level, only_writer=may_write(zs.config, caller)).run(
+        "stdio"
+    )
 
 
 @app.command()
@@ -512,6 +514,12 @@ def review_list(
             typer.echo(f"[{item['id']}] Proposed fact: {item['fact']}")
             if item.get("quote"):
                 typer.echo(f"      From: {item['quote']}")
+        elif item["kind"] == "agent_write":
+            scope = f" (tag {item['tag']})" if item.get("tag") else ""
+            typer.echo(
+                f"[{item['id']}] {item['proposed_by']} wants to {item['change']}{scope}:"
+                f" {item.get('fact', '')}"
+            )
         elif item["kind"] == "delete":
             hint = f" (looks moved to {item['moved_to']})" if item.get("moved_to") else ""
             typer.echo(f"[{item['id']}] Deleted in {item['source']}: {item['document']}{hint}{conf}")

@@ -167,6 +167,12 @@ class FactStore:
             self._table.update(where=where, values={"superseded_by": ""})
         return count
 
+    def superseding_docs(self, prefix: str) -> set[str]:
+        """The documents whose id starts with `prefix` that hide some fact."""
+        where = f"superseded_by LIKE {_quote(prefix.replace('%', '') + '%')}"
+        rows = self._table.search().where(where).select(["superseded_by"]).limit(100_000).to_list()
+        return {r["superseded_by"] for r in rows}
+
     def optimize(self) -> None:
         """Fold new rows into the indexes and compact files. Run after a sync.
 

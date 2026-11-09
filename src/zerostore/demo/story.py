@@ -28,6 +28,7 @@ SOURCE_NAMES = {
     "github": "GitHub",
     "linear": "Linear",
     "decisions": "decisions.md",
+    "written": "agent changes",
 }
 
 

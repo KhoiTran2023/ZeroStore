@@ -208,6 +208,27 @@ NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 RESERVED_TAGS = ("confidential",)  # set with the `confidential:` list and the confidential level
 
 
+UNTAGGED = "untagged"  # in agent_writes.roles: information with no tag
+
+
+class AgentWrites(_Section):
+    """Agents changing company knowledge. Off unless turned on.
+
+    `roles` maps a role to the tags whose information its agents may add, change or
+    remove (`untagged` covers information with no tag). A role may only change tags it
+    can see. Owner tokens may change everything. Changes are saved as files in `folder`,
+    which ZeroStore reads back as a source, so syncs never undo them.
+    """
+
+    enabled: bool = False
+    review: bool = False  # true: every change from an agent waits in the review queue
+    folder: str | None = None  # default: ~/.zerostore/written
+    roles: dict[str, list[str]] = Field(default_factory=dict)
+
+    def folder_path(self) -> Path:
+        return Path(self.folder).expanduser() if self.folder else home_dir() / "written"
+
+
 class ServerSettings(_Section):
     host: str = "localhost"
     port: int = Field(8765, ge=1, le=65535)
@@ -243,6 +264,7 @@ class Config(_Section):
     tags: dict[str, list[LocationRule]] = Field(default_factory=dict)
     roles: dict[str, list[str]] = Field(default_factory=dict)
     agent_proposals: bool = True
+    agent_writes: AgentWrites = Field(default_factory=AgentWrites)
     # Approved agent proposals are written here and read back as a source.
     decisions_file: str | None = None  # default: ~/.zerostore/decisions.md
     web_ui: bool = True
@@ -271,6 +293,16 @@ class Config(_Section):
             if unknown:
                 missing = ", ".join(unknown)
                 raise ValueError(f"role {name!r} names tags that aren't defined under tags: {missing}")
+        for name, tags in self.agent_writes.roles.items():
+            if name not in self.roles:
+                raise ValueError(f"agent_writes.roles: there is no role called {name!r} under roles")
+            sees = set(self.roles[name]) | {UNTAGGED}
+            unseen = [t for t in tags if t not in sees]
+            if unseen:
+                raise ValueError(
+                    f"agent_writes.roles: role {name!r} can't change {', '.join(unseen)}, because it"
+                    " can't see it (list only tags under roles, or untagged)"
+                )
         return self
 
     @model_validator(mode="after")

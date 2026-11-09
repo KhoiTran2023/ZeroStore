@@ -193,9 +193,9 @@ The MCP server is the only way in, and every request carries a token. Each token
 
 | Level | Sees | Can do |
 |---|---|---|
-| `default` | Non-confidential facts | Search, read, propose facts for you to approve |
-| `confidential` | Everything | Search, read, propose facts for you to approve |
-| `owner` | Everything | Search, read, manage tokens and the review queue, see status and activity, sign in to the web UI |
+| `default` | Non-confidential facts | Search, read, propose facts for you to approve; change facts if its role allows (below) |
+| `confidential` | Everything | Search, read, propose facts for you to approve; change facts if its role allows (below) |
+| `owner` | Everything | Search, read, manage tokens and the review queue, see status and activity, sign in to the web UI; change any fact when changes are on |
 
 A connector added in Claude's settings gets `default` or `confidential`, never `owner`.
 
@@ -216,7 +216,33 @@ The rules:
 
 The page writes `confidential:`, `tags:` and `roles:` in `zerostore.yaml`, the same settings the CLI and the YAML view use (see `zerostore.example.yaml`). The next sync applies new tags to your documents. A tag you remove stays hidden until that sync, so a typo never turns tagged information public.
 
-No token can edit a fact. Facts change only when your sources change. Tokens are stored hashed, every request is logged, and the server binds to `localhost` unless you give it HTTPS.
+### Letting agents change information
+
+Off by default. Turn it on in `zerostore.yaml` and say, per role, which tags its agents may change:
+
+```yaml
+agent_writes:
+  enabled: true
+  review: false            # leave false for no human step; true: every agent change waits for you
+  roles:
+    sales: [sales]         # sales agents may change sales information, nothing else
+    leadership: [sales, engineering, untagged]   # untagged = information with no tag
+```
+
+Agents whose role has a list get three more tools: `add_fact`, `change_fact` and `remove_fact`. Every change is checked against the information it touches: a fact carrying any tag outside the role's list, or a confidential fact for a default token, is refused, and the refusal is logged. Tokens with no role, or a role with no list, can't change anything and don't see the tools. A role may only list tags it can see. Owner tokens may change everything.
+
+Agents never write into the fact store directly, so a sync can't undo their changes. Each change is saved as a small Markdown file in `~/.zerostore/written/` (set `agent_writes.folder` to move it), which ZeroStore reads back as a source like any other:
+
+- **Adding** a fact makes a new file with the chosen tag (or the role's only tag when the agent gives none).
+- **Changing** a fact added this way rewrites its file.
+- **Changing** a fact from Google Drive, GitHub, Linear or a folder saves a correction with the same tags. The correction hides the old fact (newer wins) on every sync for as long as that fact's text is unchanged. When someone edits the original document, the source is the newer word again.
+- **Removing** a fact added this way deletes its file. Removing a fact from a document saves a small removal file that hides it the same way a correction does; the document itself is never edited.
+
+No person needs to be involved. The librarian judges each agent change like any other new information: when it finds an older fact the change replaces (same tags, `compare` at or above `review.auto_apply_at`), it retires that fact by the newer-wins rule. When it isn't sure, it keeps both rather than asking anyone, and the change still goes live. Without an AI key the change goes live as written.
+
+Changes show up in "what changed" and the activity log. To undo one, delete its file and sync. Turning `enabled` off stops new changes and keeps what was written.
+
+Apart from that, no token can edit a fact: facts change when your sources change. Tokens are stored hashed, every request is logged, and the server binds to `localhost` unless you give it HTTPS.
 
 ## What gets read
 
