@@ -629,4 +629,4 @@ Start with `zerostore doctor` in the server's terminal: every ✗ line comes wit
 | ChatGPT has no **Add custom MCP server** | The plan doesn't allow custom connectors, or you're not an admin | See the plans under [ChatGPT](#chatgpt). |
 | An app says it couldn't connect or sign in | Usually the address or the certificate | Run `zerostore doctor --url https://zs.example.com` and do what the ✗ lines say. Make sure the address ends in `/mcp`. |
 
-For more technical detail, see [docs/connect-agents.md](connect-agents.md) and the [README](../README.md).
+For more technical detail, see [docs/cloud-hosting.md](cloud-hosting.md) (how the hosted setup fits together, agents on the Claude, OpenAI and xAI APIs, safety, and a rehearsal on your own computer), [docs/connect-agents.md](connect-agents.md) and the [README](../README.md).

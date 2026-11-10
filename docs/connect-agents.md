@@ -4,6 +4,8 @@ Every agent reaches ZeroStore through its MCP server. Pick the way that fits whe
 
 New to servers and terminals? [docs/setup-guide.md](setup-guide.md) walks through everything click by click: the AWS server, the domain and its DNS record at Cloudflare, Route 53, Namecheap, GoDaddy or Squarespace, the install, your sources, and adding ZeroStore to each app.
 
+Hosting on a cloud server? [docs/cloud-hosting.md](cloud-hosting.md) explains how the hosted setup fits together, how agents on the Claude, OpenAI and xAI APIs connect, how to keep it safe, how to rehearse it on your own computer, and what to do when an agent can't connect.
+
 | Agent | Runs where | How it connects | What you paste |
 |---|---|---|---|
 | Claude Code | your computer | starts ZeroStore itself (stdio) | one `claude mcp add` line |

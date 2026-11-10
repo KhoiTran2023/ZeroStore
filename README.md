@@ -183,7 +183,7 @@ Claude, ChatGPT and Grok on the web and phone add ZeroStore the way they add Gma
    - Grok: grok.com/connectors, then New Connector, then Custom.
 2. The app sends you to ZeroStore's web UI. Sign in if asked, pick the access level and role, and click Allow.
 
-Step-by-step guides for every agent are in [docs/connect-agents.md](docs/connect-agents.md).
+Step-by-step guides for every agent are in [docs/connect-agents.md](docs/connect-agents.md). Hosting ZeroStore on a cloud server for agents elsewhere (Claude, ChatGPT and Grok, laptops, your own agents on the Claude, OpenAI or xAI APIs), keeping it safe, and rehearsing that setup on your own computer: [docs/cloud-hosting.md](docs/cloud-hosting.md).
 
 From then on Claude looks things up in ZeroStore by itself whenever a question is about your company. ChatGPT works the same once you turn the connector on for a conversation. The connection shows in your token list as "<app> (connector)"; revoke it there to disconnect. The apps' servers make the connection, so the address must be public HTTPS that the internet can reach: Cloudflare Tunnel or Caddy with your own domain work, a private Tailscale address doesn't (use Tailscale Funnel instead). The setup page shows the address to paste when ZeroStore runs with a public HTTPS `--public-url`. Claude Code can sign in the same way with `claude mcp add --transport http zerostore https://<your address>/mcp`, then `/mcp` inside Claude Code.
 
